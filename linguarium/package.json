@@ -1,0 +1,27 @@
+{
+  "name": "linguarium",
+  "version": "0.1.0",
+  "description": "Linguarium - a free, language-agnostic learning platform: structured study, natural reading, active practice and FSRS spaced repetition in one place.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev": "netlify dev",
+    "dev:ui": "npm run build && node scripts/serve.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "db:init": "node scripts/db-init.mjs"
+  },
+  "dependencies": {
+    "@netlify/identity": "^2.0.1",
+    "@neondatabase/serverless": "^1.2.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "netlify-cli": "^27.20.1"
+  }
+}

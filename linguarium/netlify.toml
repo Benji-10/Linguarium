@@ -1,0 +1,22 @@
+# Linguarium - Netlify configuration
+# Static app is built into dist/ and served from there.
+# All privileged operations (database, auth, AI) live in Netlify Functions.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[dev]
+  command = "npm run dev:ui"
+  targetPort = 3000
+  framework = "#custom"
+  autoLaunch = true
+
+# Environment variables that MUST be configured (in the Netlify UI, never committed):
+#   DATABASE_URL    - Neon PostgreSQL connection string (pooled endpoint recommended)
+#   GEMINI_API_KEY  - optional. Without it every core feature still works; AI enrichment is disabled.
+#   GEMINI_DAILY_LIMIT - optional per-user daily enrichment quota (default 300).

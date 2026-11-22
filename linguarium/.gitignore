@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+.netlify/
+
+# local env / secrets
+.env
+.env.*
+!.env.example
+
+# caches and logs
+.netlify-functions-serve/
+*.log
+.DS_Store
+npm-debug.log*
+
+# editor
+.vscode/
+.idea/

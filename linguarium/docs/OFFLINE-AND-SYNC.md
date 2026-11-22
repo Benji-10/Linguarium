@@ -1,0 +1,44 @@
+# Offline behaviour, sync and backups
+
+## Offline scope (phase 1)
+
+| Works offline | Notes |
+| --- | --- |
+| Reading | cached texts render; tokens, word panel and known-state highlighting all local |
+| Review | queue built from the cached entries + memory states; FSRS runs locally |
+| Knowledge lookup | cached entries and cached enrichments |
+| Discover difficulty estimates | computed locally from cached data |
+| Everything else | renders from cache; server actions queue |
+
+The service worker precaches the app shell and deliberately **never caches `/api/*`**
+(user data is managed in IndexedDB with explicit staleness rules, not a stale HTTP
+cache).
+
+## The change queue
+
+Actions made offline (review events, entry edits, deletions) are queued in IndexedDB
+(`src/core/idb.mjs`) and flushed through `/api/sync`:
+
+- automatically when the browser goes online, on app boot, and after sign-in;
+- manually via the Sync button (top bar) or Settings → Offline & sync.
+
+## Conflict rules
+
+1. Review events: append-only with client UUIDs — replays are no-ops. **Learning
+   progress can never be overwritten by sync.**
+2. Entry edits: applied only when the client's `updated_at` is strictly newer;
+   otherwise the server version is kept and the skipped change is **reported** ("kept
+   newer server versions of …"). Never silent.
+3. Deletions are tombstones — a delayed sync can never resurrect deleted data.
+
+## Backup export
+
+Settings → Your data → **Export backup** downloads everything (see the format in
+docs/DATABASE.md) as a single documented JSON file. Collection-level CSV/JSON export
+lives in each collection. The backup is yours to keep, parse or re-import elsewhere:
+there is no lock-in.
+
+## Deleting local data
+
+Settings → Offline & sync → **Clear local cache** removes the IndexedDB stores on the
+device only (server data untouched; it re-caches on next load).

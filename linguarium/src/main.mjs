@@ -1,0 +1,73 @@
+/**
+ * Application entry point: boot authentication, load shared data
+ * (falling back to the offline cache), register routes, render the shell,
+ * and register the service worker (installable, offline-capable PWA).
+ */
+
+import './styles.css';
+import { bootAuth } from './core/auth.mjs';
+import { setState, getState, restoreActiveLanguage } from './core/store.mjs';
+import { route, startRouter } from './core/router.mjs';
+import { renderLayout } from './ui/layout.mjs';
+import { refreshAll } from './core/data.mjs';
+import { refreshQueueCount, flushQueue } from './core/sync.mjs';
+
+async function main() {
+  // Theme (system / light / dark)
+  const theme = localStorage.getItem('linguarium.theme') || 'auto';
+  document.documentElement.dataset.theme = theme;
+
+  const shell = document.getElementById('app');
+  renderLayout(shell);
+
+  // Register routes. Views are imported lazily by the router.
+  const { renderDashboard } = await import('./views/dashboard.mjs');
+  const { renderAuth } = await import('./views/auth.mjs');
+  route('#/', renderDashboard);
+  route('#/auth', renderAuth, { public: true });
+  route('#/discover', (await import('./views/discover.mjs')).renderDiscover);
+  route('#/reading', (await import('./views/reading.mjs')).renderReading);
+  route('#/read/:kind/:id', (await import('./views/reader.mjs')).renderReader);
+  route('#/review', (await import('./views/review.mjs')).renderReview);
+  route('#/practice', (await import('./views/practice.mjs')).renderPractice);
+  route('#/listening', (await import('./views/listening.mjs')).renderListening);
+  route('#/knowledge', (await import('./views/knowledge.mjs')).renderKnowledge);
+  route('#/grammar', (await import('./views/grammar.mjs')).renderGrammar);
+  route('#/collections', (await import('./views/collections.mjs')).renderCollections);
+  route('#/collections/:id', (await import('./views/collections.mjs')).renderCollections);
+  route('#/settings', (await import('./views/settings.mjs')).renderSettings);
+
+  // Boot: restore session, then load data (cache-first when offline).
+  const { user } = await bootAuth();
+  restoreActiveLanguage();
+  setState({ booting: false });
+
+  if (user) {
+    await refreshAll();
+    await refreshQueueCount();
+    // Default the active language to the first profile when none was saved.
+    if (!getState().activeLanguage && (getState().profiles ?? []).length > 0) {
+      const first = getState().profiles[0].language_code;
+      localStorage.setItem('linguarium.activeLanguage', first);
+      setState({ activeLanguage: first });
+    }
+    if (getState().online && getState().queueCount > 0) {
+      flushQueue({ silent: true }).then(() => refreshQueueCount());
+    }
+  }
+
+  startRouter();
+
+  // Service worker: installable app shell, offline reading/review.
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
+    navigator.serviceWorker.register('/sw.js').catch((err) => {
+      console.warn('[pwa] service worker registration failed', err);
+    });
+  }
+}
+
+main().catch((err) => {
+  console.error('boot failed', err);
+  const el = document.getElementById('view');
+  if (el) el.innerHTML = '<section class="panel error-panel"><h2>The app failed to start</h2><p class="muted">Please reload the page.</p></section>';
+});
