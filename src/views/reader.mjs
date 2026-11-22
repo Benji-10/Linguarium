@@ -95,6 +95,8 @@ export async function renderReader(container, params) {
           ${text.license ? `<span class="badge neutral">${esc(licenseLabel(text.license))}</span>` : ''}
         </p>
         ${text.adaptation_note ? `<p class="muted small adaptation">Adaptation: ${esc(text.adaptation_note)}</p>` : ''}
+        ${text.source_url ? `<p class="muted small">Source: <a href="${esc(text.source_url)}" target="_blank" rel="noopener noreferrer">${esc(text.source_url)}</a></p>` : ''}
+        ${text.source_ref ? `<p class="muted small">${esc(text.source_ref)}</p>` : ''}
       </div>
       <div class="reader-tools">
         <span class="badge ${difficulty.band === 'challenge' ? 'warn' : difficulty.band === 'comfortable' ? 'pos' : 'info'}" id="band-pill" title="Difficulty estimated from your own knowledge state (automated analysis)">

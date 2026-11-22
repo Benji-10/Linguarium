@@ -6,6 +6,12 @@
   command = "npm run build"
   publish = "dist"
 
+# Node 22 is required: @neondatabase/serverless needs >= 19 and the build tooling
+# assumes a modern Node (the `v` regex flag, etc.). Netlify picks this up from
+# netlify.toml AND the committed .nvmrc; do NOT change either back to 18.
+[build.environment]
+  NODE_VERSION = "22"
+
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"

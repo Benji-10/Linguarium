@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS knowledge.grammar_structures (
   source_ref    TEXT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Natural key so that seeding (and re-seeding) is idempotent.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_grammar_structures_lang_name
+  ON knowledge.grammar_structures (language_code, name);
 
 CREATE TABLE IF NOT EXISTS knowledge.shared_texts (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -61,8 +64,14 @@ CREATE TABLE IF NOT EXISTS knowledge.shared_texts (
   license       TEXT NOT NULL DEFAULT 'unspecified',
   adaptation_note TEXT,
   provenance    TEXT NOT NULL DEFAULT 'community',
+  source_ref    TEXT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Natural key so that seeding (and re-seeding) is idempotent.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_shared_texts_lang_title
+  ON knowledge.shared_texts (language_code, title);
+-- For databases initialized from an earlier schema version.
+ALTER TABLE knowledge.shared_texts ADD COLUMN IF NOT EXISTS source_ref TEXT;
 
 -- Cache for AI enrichment results. Keyed by (language, term, schema version)
 -- so the same term is never sent to the model twice for all users.

@@ -85,11 +85,34 @@ git push -u origin main
 
 1. Sign up at [neon.com](https://neon.com) and create a project.
 2. Copy the **pooled** connection string (`...-pooler...neon.tech/...?sslmode=require`).
-3. Initialize the schema and seed data (either way):
-   - locally: `cp .env.example .env`, fill `DATABASE_URL`, then `npm run db:init`;
-   - or open the Neon SQL editor and paste the contents of `sql/schema.sql` followed by `sql/seed.sql`.
 
-### 3. Deploy on Netlify
+### 3. Populate the database (schema + seed content)
+
+The app needs the schema and seed data in the database before the shared library,
+grammar catalog and language presets appear. Three equivalent ways, pick one:
+
+- **From the deployed site (easiest):** set `ADMIN_KEY` in the Netlify UI (a long
+  random string, e.g. `openssl rand -hex 32`), then once after the first deploy:
+
+  ```bash
+  curl -X POST https://<your-site>.netlify.app/api/admin-seed -H "x-admin-key: $ADMIN_KEY"
+  ```
+
+  Safe to call repeatedly: every statement is idempotent, and the endpoint only
+  ever creates shared `knowledge` data and empty `user_data` tables — it can
+  never touch user content. Without `ADMIN_KEY` the endpoint answers 404.
+- **Locally:** `cp .env.example .env`, fill `DATABASE_URL`, then `npm run db:init`
+  (schema + seed) or `npm run db:seed` (seed only, after schema creation).
+  `node scripts/db-init.mjs --dry-run` validates the SQL files without a database.
+- **In the Neon SQL editor:** paste the contents of `sql/schema.sql` followed by
+  `sql/seed.sql`.
+
+The seed loads ~58 language presets, a shared reading library (public-domain
+  classics with full citations + demonstration texts) and a starter grammar catalog.
+Everything seeded carries provenance labels; `verified` entries cite the page they
+were transcribed from, `community` entries say exactly what they are.
+
+### 4. Deploy on Netlify
 
 1. In Netlify: **Add new site → Import an existing project → GitHub** → pick the repository.
 2. Build settings (auto-filled from `netlify.toml`, verify anyway):
@@ -99,9 +122,10 @@ git push -u origin main
    - `DATABASE_URL` — the Neon pooled connection string (**required**)
    - `GEMINI_API_KEY` — optional; without it AI features are disabled but everything else works
    - `GEMINI_DAILY_LIMIT` — optional per-user daily enrichment quota (default 300)
+   - `ADMIN_KEY` — optional; enables `POST /api/admin-seed` (see step 3)
 4. Deploy.
 
-### 4. Enable Netlify Identity
+### 5. Enable Netlify Identity
 
 1. Site configuration → **Identity** → Enable.
 2. Under Registration: allow open signups (or invite-only, your choice).
@@ -109,17 +133,23 @@ git push -u origin main
 4. Optional: add OAuth providers (Google, GitHub, …). The custom login screen picks them up automatically.
 
 That's it — visit your site, create an account, add a language, import a word list,
-read something, review. The seeded shared library (public-domain classics + demo content)
-appears once `sql/seed.sql` has run.
+read something, review. The seeded shared library (public-domain classics + demo
+content) appears once the database has been populated (step 3).
 
 ## Local development
 
+Requires Node.js ≥ 20 (the build uses Node 22 on Netlify — see `.nvmrc`).
+
 ```bash
-npm install                # esbuild, netlify-cli, @netlify/identity, @neondatabase/serverless
+npm install                # esbuild, @netlify/identity, @neondatabase/serverless
 cp .env.example .env       # fill DATABASE_URL (local or Neon); GEMINI_API_KEY optional
-npm run db:init            # create schema + seed
-npm run dev                # netlify dev: dist served locally + functions + local Identity
+npm run db:init            # create schema + seed (npm run db:seed = seed only)
+npm run dev                # netlify dev (via npx): dist + functions + local Identity
 ```
+
+`netlify-cli` is deliberately **not** a dependency (it needs Node ≥ 22.13 and is
+not needed on the build server); `npm run dev` fetches it on demand via `npx`,
+or install it globally yourself (`npm i -g netlify-cli`).
 
 `netlify dev` provides the local Identity endpoint that `@netlify/identity` expects
 (sign-up, login and email flows work locally). For a quick static preview without
@@ -128,8 +158,8 @@ functions, `npm run dev:ui` builds and serves `dist` on port 3000.
 ## Testing and checks
 
 ```bash
-npm test     # 60 unit tests: FSRS-5 identities and behaviour, tokenizer, parsers,
-             # status thresholds, difficulty bands, offline merge rules
+npm test     # 67 unit tests: FSRS-5 identities and behaviour, tokenizer, parsers,
+             # status thresholds, difficulty bands, offline merge rules, SQL splitter
 npm run check # node --check over every source and function file
 npm run build # esbuild bundle into dist/
 ```
@@ -138,9 +168,10 @@ npm run build # esbuild bundle into dist/
 
 ```
 ├── index.html, manifest.webmanifest, sw.js    PWA shell (sw stamped per build)
-├── netlify.toml                               build & functions configuration
+├── netlify.toml                               build & functions configuration (Node 22)
 ├── sql/schema.sql, sql/seed.sql               Neon schema (knowledge + user_data) and seeds
-├── scripts/                                   build, serve, db-init, syntax check
+├── scripts/                                   build (incl. seed bundle), serve, db-init
+│                                              (schema / seed / --dry-run), syntax check
 ├── src/
 │   ├── shared/         pure learning logic: FSRS-5, tokenizer, status model,
 │   │                   difficulty estimation, import parsers, merge rules (all tested)
@@ -150,6 +181,7 @@ npm run build # esbuild bundle into dist/
 │   └── views/          dashboard, discover, reading, reader, review, practice (p2),
 │                       listening (p2), knowledge, grammar, collections, settings, auth
 └── netlify/functions/  v2 functions: identity guard, db access, all /api/* endpoints,
+                         admin-seed (populates the DB, ADMIN_KEY gated),
                          Gemini enrichment (cache + quota + honesty rules), sync, export,
                          account deletion
 ```

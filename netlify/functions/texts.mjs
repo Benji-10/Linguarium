@@ -32,7 +32,7 @@ export default handler({
         return json({ text: rows[0] });
       }
       const rows = await sql()`
-        SELECT id, language_code, title, body, author, source_url, license, adaptation_note, provenance, created_at
+        SELECT id, language_code, title, body, author, source_url, license, adaptation_note, provenance, source_ref, created_at
         FROM knowledge.shared_texts
         WHERE id = ${q.id}`;
       if (rows.length === 0) throw new HttpError(404, 'not-found', 'Shared text not found.');
@@ -46,7 +46,7 @@ export default handler({
       WHERE user_id = ${user.id} AND deleted_at IS NULL
       ORDER BY updated_at DESC`;
     const shared = await sql()`
-      SELECT id, language_code, title, author, source_url, license, adaptation_note, provenance,
+      SELECT id, language_code, title, author, source_url, license, adaptation_note, provenance, source_ref,
              length(body)::int AS body_length, created_at
       FROM knowledge.shared_texts
       ORDER BY created_at`;

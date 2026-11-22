@@ -66,8 +66,26 @@ The same rules are mirrored client-side in `src/shared/merge.mjs` for the UI cop
 
 Plain JSON, documented, one file — nothing is locked in.
 
-## Initialization
+## Initialization and population
 
-`npm run db:init` (or paste `sql/schema.sql` + `sql/seed.sql` into the Neon SQL editor).
-All statements are idempotent (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`), so re-running
-is safe.
+Three equivalent ways to create the schema and load the seed data (languages,
+shared reading texts, grammar structures — all shared `knowledge` data, never
+user content):
+
+1. **From the deployed site:** set `ADMIN_KEY` in the Netlify UI, then
+   `curl -X POST https://<site>.netlify.app/api/admin-seed -H "x-admin-key: $ADMIN_KEY"`.
+   The function runs `sql/schema.sql` then `sql/seed.sql` (embedded at build time
+   into `netlify/functions/lib/seed-bundle.mjs` by `scripts/build.mjs`), first as a
+   single atomic transaction, falling back to statement-by-statement execution
+   when it meets pre-existing objects. Timing-safe key comparison; without
+   `ADMIN_KEY` the endpoint answers 404.
+2. **Locally:** `npm run db:init` (schema + seed) or `npm run db:seed` (seed only).
+   `node scripts/db-init.mjs --dry-run` validates the SQL files without a database.
+3. **Neon SQL editor:** paste `sql/schema.sql` followed by `sql/seed.sql`.
+
+Everything is idempotent (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING` on natural
+keys: language+title for texts, language+name for grammar structures), so
+re-running any of these on a populated database is safe and duplicates nothing.
+Statement splitting is shared between the local script and the admin function
+(`netlify/functions/lib/sqlsplit.mjs`), which is dollar-quote aware, so seed
+bodies may contain semicolons and apostrophes freely.
