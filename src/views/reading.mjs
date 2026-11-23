@@ -22,7 +22,7 @@ import { getState, setState, languageName } from '../core/store.mjs';
 import { navigate } from '../core/router.mjs';
 import { api } from '../core/api.mjs';
 import { loadTexts } from '../core/data.mjs';
-import { LICENSE_OPTIONS } from '../shared/constants.mjs';
+import { LICENSE_OPTIONS, DIFFICULTY_MODES, PROFICIENCY_LEVELS } from '../shared/constants.mjs';
 import { extractFromFile } from '../shared/filetext.mjs';
 
 export async function renderReading(container) {
@@ -459,7 +459,7 @@ function renderLibraryTab(panel, modalRef, languageCode) {
         <select id="l-provider" aria-label="Source">
           ${LIBRARY_PROVIDERS.map((p) => `<option value="${p.id}">${esc(p.label)} - ${esc(p.license)}</option>`).join('')}
         </select>
-        <input id="l-query" maxlength="200" placeholder="Search (title, topic, author...)">
+        <input id="l-query" maxlength="200" placeholder="Search (title, topic, author...) - leave empty to browse the language shelf">
         <button class="btn primary small" id="l-search">${icon('compass')}Search</button>
       </div>
       <p class="muted small" id="l-note">Free, keyless sources in your active language only - importing keeps the source's license and attribution.</p>
@@ -467,105 +467,148 @@ function renderLibraryTab(panel, modalRef, languageCode) {
     </div>`;
   const el = (id) => panel.querySelector(`#${id}`);
   const results = el('l-results');
+  // Page cursor for providers that paginate (Project Gutenberg).
+  let currentPage = 1;
 
-  const search = async () => {
+  const itemRowsHtml = (items) =>
+    `<div class="stack">${items
+      .map(
+        (it) => `
+        <div class="library-item">
+          <div class="library-item-main">
+            <strong>${esc(it.title)}</strong>
+            <span class="muted small">${esc(it.author ?? 'unattributed')}${it.description ? ` - ${esc(it.description)}` : ''}</span>
+            <span class="muted small">${esc(it.license ?? '')}${it.source_url ? ` - <a href="${esc(it.source_url)}" target="_blank" rel="noopener noreferrer">source</a>` : ''}</span>
+          </div>
+          <button class="btn subtle small" data-import-ref="${esc(it.ref)}" data-import-provider="${esc(it.provider)}" data-import-title="${esc(it.title)}">${icon('download')}Import</button>
+        </div>`,
+      )
+      .join('')}</div>`;
+
+  const pagerHtml = (data) => {
+    if (!data?.pages) return '';
+    const pager = [];
+    if (data.pages.previous && currentPage > 1) pager.push(`<button class="btn subtle small" data-page="${currentPage - 1}">${icon('chevron')}Previous page</button>`);
+    if (data.pages.count != null) pager.push(`<span class="muted small">page ${currentPage} of ${Math.ceil(data.pages.count / 32)} - ${data.pages.count} books in this language</span>`);
+    if (data.pages.next) pager.push(`<button class="btn subtle small" data-page="${currentPage + 1}">Next page${icon('chevron')}</button>`);
+    return pager.length ? `<div class="library-controls" style="margin-top:10px">${pager.join(' ')}</div>` : '';
+  };
+
+  const search = async (page = 1) => {
     const provider = el('l-provider').value;
     const q = el('l-query').value.trim();
-    results.innerHTML = `${spinner('Searching')}`;
+    currentPage = page;
+    results.innerHTML = `${spinner(page > 1 ? 'Loading page ' + page : 'Searching')}`;
     try {
-      const data = await api('/api/catalog', { params: { provider, language: languageCode, q } });
+      const data = await api('/api/catalog', { params: { provider, language: languageCode, q, page } });
       el('l-note').textContent =
         data.note ??
-        (data.failed_feeds?.length ? `Feed unavailable: ${data.failed_feeds.join(', ')} - try again later.` : 'Free, keyless sources in your active language only - importing keeps the source\'s license and attribution.');
+        (data.failed_feeds?.length ? `Feed unavailable: ${data.failed_feeds.join(', ')} - try again later.` : "Free, keyless sources in your active language only - importing keeps the source's license and attribution.");
       if ((data.items ?? []).length === 0) {
         results.innerHTML =
           '<p class="muted small">No results. Try another provider or another search - the open sources are unevenly stocked per language.</p>';
         return;
       }
-      results.innerHTML = `<div class="stack">${data.items
-        .map(
-          (it) => `
-          <div class="library-item">
-            <div class="library-item-main">
-              <strong>${esc(it.title)}</strong>
-              <span class="muted small">${esc(it.author ?? data.provider)}${it.description ? ` - ${esc(it.description)}` : ''}</span>
-              <span class="muted small">${esc(it.license ?? '')}${it.source_url ? ` - <a href="${esc(it.source_url)}" target="_blank" rel="noopener noreferrer">source</a>` : ''}</span>
-            </div>
-            <button class="btn subtle small" data-import-ref="${esc(it.ref)}" data-import-provider="${esc(it.provider)}" data-import-title="${esc(it.title)}">${icon('download')}Import</button>
-          </div>`,
-        )
-        .join('')}</div>`;
-      results.querySelectorAll('[data-import-ref]').forEach((btn) =>
-        btn.addEventListener('click', async () => {
-          btn.disabled = true;
-          btn.innerHTML = `${icon('download').toString()}Importing...`;
-          try {
-            const data = await api('/api/import-source', {
-              method: 'POST',
-              body: {
-                mode: 'provider',
-                provider: btn.dataset.importProvider,
-                ref: btn.dataset.importRef,
-                language_code: languageCode,
-              },
-            });
-            if (data.truncated) toast('The source is longer than the import limit - the first part was imported (the text says so).', 'info');
-            await loadTexts();
-            toast('Imported into your library.', 'pos');
-            modalRef.close();
-            navigate(`#/read/user/${data.text.id}`);
-          } catch (err) {
-            btn.disabled = false;
-            btn.innerHTML = `${icon('download').toString()}Import`;
-            toast(err.message ?? 'The import failed.', 'neg');
-          }
-        }),
-      );
+      results.innerHTML = itemRowsHtml(data.items) + pagerHtml(data);
     } catch (err) {
-      results.innerHTML = `<p class="muted small">${esc(err.message ?? 'The search failed (offline?).')}</p>`;
+      // The open catalogue can refuse (rate limit, Cloudflare, a slow
+      // upstream) - that is an expected condition, not a crash: offer a
+      // retry and the other providers instead of a dead end.
+      results.innerHTML = `
+        <div class="import-preview" style="padding:12px">
+          <p class="muted small" style="margin:0 0 8px">${esc(err.message ?? 'The catalogue did not respond.')}</p>
+          <button class="btn subtle small" id="l-retry">${icon('review')}Retry</button>
+        </div>`;
+      results.querySelector('#l-retry')?.addEventListener('click', () => search(1));
+      return;
     }
+    results.querySelectorAll('[data-page]').forEach((btn) =>
+      btn.addEventListener('click', () => search(Number(btn.dataset.page))),
+    );
+    results.querySelectorAll('[data-import-ref]').forEach((btn) =>
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.innerHTML = `${icon('download').toString()}Importing...`;
+        try {
+          const data = await api('/api/import-source', {
+            method: 'POST',
+            body: {
+              mode: 'provider',
+              provider: btn.dataset.importProvider,
+              ref: btn.dataset.importRef,
+              language_code: languageCode,
+            },
+          });
+          if (data.truncated) toast('The source is longer than the import limit - the first part was imported (the text says so).', 'info');
+          await loadTexts();
+          toast('Imported into your library.', 'pos');
+          modalRef.close();
+          navigate(`#/read/user/${data.text.id}`);
+        } catch (err) {
+          btn.disabled = false;
+          btn.innerHTML = `${icon('download').toString()}Import`;
+          toast(err.message ?? 'The import failed.', 'neg');
+        }
+      }),
+    );
   };
 
-  el('l-search').addEventListener('click', search);
+  el('l-search').addEventListener('click', () => search(1));
   el('l-query').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') search();
+    if (e.key === 'Enter') search(1);
   });
-  search();
+  // Opening the tab browses the language shelf immediately (the fast route
+  // per provider); failures above render a retry instead of raw errors.
+  search(1);
 }
 
 // ---- AI generate tab -----------------------------------------------------------
 
 const GENERATE_KINDS = ['story', 'news', 'essay', 'dialogue', 'letter'];
-const GENERATE_LENGTHS = ['short', 'medium', 'long'];
+const GENERATE_LENGTHS = [
+  { value: 'short', label: 'Short - 200-350 words' },
+  { value: 'medium', label: 'Medium - 450-700 words' },
+  { value: 'long', label: 'Long - 1000-1500 words' },
+];
 const GENERATE_BANDS = ['comfortable', 'stretch', 'challenge'];
+
+/** Default difficulty band for the generator: the declared level says more
+ *  than the difficulty mode does ("complete beginner in Korean, fluent in
+ *  French") - the mode stays for material recommendations. */
+function bandForProfile(profile) {
+  if (profile?.level) {
+    const found = PROFICIENCY_LEVELS.find((l) => l.value === profile.level);
+    if (found) return found.band;
+  }
+  return profile?.difficulty_mode ?? 'stretch';
+}
 
 function renderGenerateTab(panel, modalRef, languageCode) {
   const s = getState();
   const profile = (s.profiles ?? []).find((p) => p.language_code === languageCode);
   const langLabel = languageName(s.languages, languageCode);
+  const defaultBand = bandForProfile(profile);
   panel.innerHTML = `
     <form class="stack" id="gen-form">
-      <label>Topic or idea <input id="g-topic" required maxlength="300" placeholder="e.g. an old lighthouse keeper who finds a message in a bottle"></label>
+      <label>Topic or idea <span class="muted small">(optional - leave empty and the server picks a fresh one for you, never repeating a topic you already generated)</span>
+        <input id="g-topic" maxlength="300" placeholder="e.g. an old lighthouse keeper who finds a message in a bottle - or leave empty for a surprise">
+      </label>
       <label>Kind
         <select id="g-kind">${GENERATE_KINDS.map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
       </label>
       <label>Length
-        <select id="g-length">${GENERATE_LENGTHS.map((l) => `<option value="${l}" ${l === 'medium' ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <select id="g-length">${GENERATE_LENGTHS.map((l) => `<option value="${l.value}" ${l.value === 'medium' ? 'selected' : ''}>${esc(l.label)}</option>`).join('')}</select>
       </label>
       <label>Difficulty
-        <select id="g-band">${GENERATE_BANDS.map((b) => `<option value="${b}" ${b === (profile?.difficulty_mode ?? 'stretch') ? 'selected' : ''}>${b}</option>`).join('')}</select>
+        <select id="g-band">${GENERATE_BANDS.map((b) => `<option value="${b}" ${b === defaultBand ? 'selected' : ''}>${b}</option>`).join('')}</select>
       </label>
-      <p class="muted small">Written by gemini-3.1-flash-lite for you in ${esc(langLabel)}, personalized with your own vocabulary. The prompt bans the usual AI register (no clichés, no rule-of-three, no moralizing close). The saved text is provenance <span class="badge warn">ai</span> and says exactly how it was made.</p>
+      <p class="muted small">Written by gemini-3.1-flash-lite for you in ${esc(langLabel)}, personalized with your own vocabulary. The prompt bans the usual AI register (no clichés, no rule-of-three, no moralizing close). The saved text is provenance <span class="badge warn">ai</span> and says exactly how it was made.${profile?.level ? ` Difficulty starts from your declared level (${esc(PROFICIENCY_LEVELS.find((l) => l.value === profile.level)?.label ?? profile.level)}) - change it in Settings.` : ''}</p>
       <button class="btn primary" id="g-go" type="button">${icon('wand')}Generate</button>
     </form>`;
   const el = (id) => panel.querySelector(`#${id}`);
 
   el('g-go').addEventListener('click', async () => {
     const topic = el('g-topic').value.trim();
-    if (!topic) {
-      toast('Describe a topic first.', 'warn');
-      return;
-    }
     // Personalization: the learner's own known and in-learning terms for this
     // language feed the prompt (the server caps and validates them again).
     const entries = (getState().entries ?? []).filter((e) => e.language_code === languageCode);
@@ -589,7 +632,12 @@ function renderGenerateTab(panel, modalRef, languageCode) {
         },
       });
       await loadTexts();
-      toast('Generated and saved to your library.', 'pos');
+      const gen = data.generation ?? {};
+      if (gen.auto_topic) {
+        toast(`Topic picked for you: "${gen.topic}"${gen.pool_reset ? ' (the pool restarted - every theme has been used once)' : ''}. Generated and saved.`, 'pos');
+      } else {
+        toast('Generated and saved to your library.', 'pos');
+      }
       modalRef.close();
       navigate(`#/read/user/${data.text.id}`);
     } catch (err) {

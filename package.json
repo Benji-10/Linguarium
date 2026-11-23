@@ -15,7 +15,8 @@
     "test": "node --test tests/*.test.mjs",
     "check": "node scripts/check.mjs",
     "db:init": "node scripts/db-init.mjs",
-    "db:seed": "node scripts/db-init.mjs --seed-only"
+    "db:seed": "node scripts/db-init.mjs --seed-only",
+    "db:auto": "node scripts/db-auto.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.1",

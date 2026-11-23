@@ -24,10 +24,12 @@ import { requireUser, ensureUserRow, languageFor } from './lib/identity.mjs';
 import { sql } from './lib/db.mjs';
 import {
   fetchText,
-  fetchJson,
+  fetchTextCapped,
+  fetchJsonRetry,
   htmlToText,
   htmlTitle,
   GUTENBERG_TEXT_URLS,
+  GUTENDEX_BOOK_URL,
   MW_EXTRACT_URL,
   MW_PARSE_URL,
   extractFromMwExtracts,
@@ -35,6 +37,11 @@ import {
 } from './lib/sources.mjs';
 
 const MAX_BODY_CHARS = 200000;
+// The mirror is slow but reliable (~30 KB/s observed); the main site refuses
+// datacenter traffic with an instant 503. Each candidate gets a timeout
+// that fits the TOTAL function budget (~28 s worst case).
+const GUTENBERG_CANDIDATE_TIMEOUTS = [24000, 8000, 8000];
+const GUTENBERG_BYTE_CAP = 700 * 1024; // > the 200k-char import cut for every script
 const TEXT_PROVIDERS = new Set(['gutenberg', 'wikisource', 'wikipedia', 'wikinews']);
 
 const PROVIDER_META = {
@@ -102,17 +109,30 @@ async function fetchUrlPreview(rawUrl) {
   return { title, text: cut, truncated };
 }
 
+/** Gutenberg book body. Candidates in order (mirror first - it works from
+ *  datacenter IPs, gutenberg.org 503-throttles them), streaming with a byte
+ *  cap so multi-megabyte books stop downloading at the import limit.
+ *  Returns { body, byteCapped } so the caller can report it honestly. */
 async function fetchGutenbergBody(bookId) {
+  const urls = GUTENBERG_TEXT_URLS(bookId);
   let lastError = null;
-  for (const url of GUTENBERG_TEXT_URLS(bookId)) {
+  for (let i = 0; i < urls.length; i += 1) {
     try {
-      const body = await fetchText(url, { timeoutMs: 60000, maxBytes: 4 * 1024 * 1024 });
-      if (body && body.trim().length > 200) return body;
+      const { text, capped } = await fetchTextCapped(urls[i], {
+        timeoutMs: GUTENBERG_CANDIDATE_TIMEOUTS[i] ?? 8000,
+        maxBytes: GUTENBERG_BYTE_CAP,
+      });
+      if (text && text.trim().length > 200) return { body: text, byteCapped: capped };
+      lastError = new Error('source returned no usable text');
     } catch (err) {
       lastError = err;
     }
   }
-  throw new HttpError(502, 'source-unreachable', `The book text could not be fetched from Project Gutenberg. ${lastError?.message ?? ''}`);
+  throw new HttpError(
+    502,
+    'source-unreachable',
+    `The book text could not be fetched from Project Gutenberg or its mirror. ${lastError?.message ?? ''}`,
+  );
 }
 
 async function fetchWikiPage(project, language, title) {
@@ -180,17 +200,20 @@ export default handler({
       let license;
       let sourceUrl;
       let note;
+      let byteCapped = false;
       let title = ref;
 
       if (provider === 'gutenberg') {
         if (!/^\d+$/.test(ref)) throw new HttpError(400, 'invalid-ref', 'Gutenberg refs are numeric book ids.');
         let meta = null;
         try {
-          meta = await fetchJson(`https://gutendex.com/books/${ref}`, { timeoutMs: 20000 });
+          meta = await fetchJsonRetry(GUTENDEX_BOOK_URL(ref), { timeoutMs: 10000 });
         } catch {
           /* metadata is best-effort; the text fetch below decides */
         }
-        body = await fetchGutenbergBody(ref);
+        const fetched = await fetchGutenbergBody(ref);
+        body = fetched.body;
+        byteCapped = fetched.byteCapped;
         const meta2 = PROVIDER_META.gutenberg;
         author = meta.author ?? meta2.authorOf(meta);
         license = meta2.license;
@@ -212,9 +235,12 @@ export default handler({
       if (cut.trim().length < 20) {
         throw new HttpError(422, 'not-readable', 'The source returned no usable text.');
       }
+      const truncatedByBytes = byteCapped && cut.length < MAX_BODY_CHARS;
       const adaptationNote = truncated
         ? `${note} Only the first ${MAX_BODY_CHARS} characters (cut at a sentence boundary) were imported - the source is longer.`
-        : note;
+        : truncatedByBytes
+          ? `${note} The download stopped at the import byte limit, so only about the first ${MAX_BODY_CHARS} characters are here - the source is longer.`
+          : note;
 
       const rows = await sql()`
         INSERT INTO user_data.texts
@@ -223,7 +249,7 @@ export default handler({
           (${user.id}, ${languageCode}, ${String(title).slice(0, 300)}, ${cut},
            ${author}, ${sourceUrl}, ${license}, ${adaptationNote}, 'user-imported')
         RETURNING id, user_id, language_code, title, author, source_url, license, adaptation_note, provenance, topic, created_at, updated_at`;
-      return json({ text: rows[0], truncated }, 201);
+      return json({ text: rows[0], truncated: truncated || truncatedByBytes }, 201);
     }
 
     throw new HttpError(400, 'invalid-mode', 'Field "mode" must be "url" or "provider".');

@@ -21,6 +21,7 @@ import { api } from '../core/api.mjs';
 import { navigate } from '../core/router.mjs';
 import { tokenize, normalizeTerm } from '../shared/tokenizer.mjs';
 import { parseRuby, readingMapFor } from '../shared/ruby.mjs';
+import { paginate } from '../shared/parsers.mjs';
 import { segmentDictionaryFor } from '../core/data.mjs';
 import { scoreText } from '../shared/difficulty.mjs';
 import { deriveStatus } from '../shared/status.mjs';
@@ -96,6 +97,14 @@ export async function renderReader(container, params) {
   );
   const difficulty = scoreText({ text: clean, tokenizer, knownSet, dictionary });
 
+  // ---- Pagination for long texts (Apple-Books-style pages) -----------------------
+  // Gutenberg books run to hundreds of thousands of characters: rendering one
+  // page at a time keeps layout fast, reading comfortable (a real page turn,
+  // not an endless scroll), and the position saveable per page. Short texts
+  // produce a single page and render exactly as before.
+  const cjkLike = Boolean(tokenizer.charLevel) || /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}/u.test(clean.slice(0, 400));
+  const pages = paginate(clean, cjkLike ? 700 : 1800);
+
   // Ruby display toggle (per language, persisted). Annotations are parsed
   // out of the text either way; the toggle only hides/shows the ruby text.
   const langHasRuby = marks.length > 0 || language === 'ja' || language === 'zh';
@@ -143,6 +152,13 @@ export async function renderReader(container, params) {
 
     <div class="reader-body ${rtl ? 'rtl' : ''}" id="reader-body" dir="${rtl ? 'rtl' : 'ltr'}" lang="${esc(language)}"></div>
 
+    <div class="reader-pager" id="reader-pager" hidden>
+      <button class="btn subtle small" id="pg-prev" title="Previous page (left arrow)">${icon('chevron')}Previous</button>
+      <span class="pager-info" id="pg-info"></span>
+      <button class="btn subtle small" id="pg-next" title="Next page (right arrow)">Next${icon('chevron')}</button>
+    </div>
+    <p class="muted small" id="pg-hint" style="text-align:center" hidden></p>
+
     <div class="listen-bar" id="listen-bar" hidden>
       <button class="btn subtle small" id="listen-play">${icon('headphones')}Listen</button>
       <button class="icon-btn" id="listen-prev" title="Previous sentence">${icon('chevron')}</button>
@@ -170,14 +186,104 @@ export async function renderReader(container, params) {
   `;
 
   const body = container.querySelector('#reader-body');
-  const renderBody = () =>
+  const pager = container.querySelector('#reader-pager');
+  const pagerInfo = container.querySelector('#pg-info');
+  const pagerHint = container.querySelector('#pg-hint');
+
+  // Reading-session reading sources, declared before renderBody so a
+  // re-render (page turn, ruby toggle) can merge what reading has learned.
+  const lookups = new Map(); // norm -> dictionary lookup payload (may carry readings)
+  const enrichments = new Map(); // norm -> AI enrichment payload (may carry readings)
+
+  // Effective ruby readings: vocabulary + segmentation dictionary (computed
+  // once above) MERGED with anything the reading session has since learned -
+  // dictionary lookups and AI analyses carry readings, so a word looked up
+  // once gets furigana immediately (that is what makes the furigana toggle
+  // visibly do something on texts that carry no inline annotations).
+  const effectiveReadings = () => {
+    const merged = new Map(vocabReadings);
+    for (const [norm, enr] of enrichments) {
+      const reading = enr?.payload?.reading;
+      if (reading) merged.set(norm, String(reading));
+    }
+    for (const [norm, lk] of lookups) {
+      const reading = (lk?.entries ?? []).find((e) => e?.reading)?.reading;
+      if (reading) merged.set(norm, String(reading));
+    }
+    return merged;
+  };
+
+  // Reading progress restore: pages first (new format), then the legacy
+  // scroll-position format (page 1 + scrollTo).
+  let currentPage = 1;
+  if (Number.isFinite(Number(savedPosition.page))) {
+    currentPage = Math.min(pages.length, Math.max(1, Number(savedPosition.page) || 1));
+  }
+
+  let rubyHintShown = false;
+  const renderBody = () => {
+    const page = pages[currentPage - 1];
+    const readings = showRuby === '1' ? effectiveReadings() : null;
     renderTokens(body, clean, tokenizer, classify, rtl, {
       dictionary,
       rubyMarks: marks,
-      vocabReadings,
+      vocabReadings: readings,
       showRuby: showRuby === '1',
+      pageStart: page.start,
+      pageEnd: page.end,
     });
+
+    // Pager: hidden for one-page texts (the old experience, unchanged).
+    if (pager) {
+      pager.hidden = pages.length <= 1;
+      if (!pager.hidden) {
+        const percent = Math.round((page.end / Math.max(1, clean.length)) * 100);
+        pagerInfo.textContent = `page ${currentPage} of ${pages.length} · ${percent}% · ${fmtLen2(clean.length)} characters`;
+        container.querySelector('#pg-prev').disabled = currentPage <= 1;
+        container.querySelector('#pg-next').disabled = currentPage >= pages.length;
+      }
+    }
+    // Honest note when ruby is on but this text has no readings to show yet
+    // (no inline annotations, nothing in vocabulary/lexicon/lookups): the
+    // toggle is not broken - it has nothing to render, and it will light up
+    // as words gain readings while reading.
+    if (pagerHint) {
+      const noReadings =
+        showRuby === '1' && marks.length === 0 && (readings?.size ?? 0) === 0 && body.querySelectorAll('ruby').length === 0;
+      pagerHint.hidden = !noReadings;
+      if (noReadings) {
+        pagerHint.textContent =
+          `${rubyLabel} is on, but no readings are known for this text yet - readings come from your vocabulary, the shared lexicon, dictionary lookups and AI analyses done while reading; words you look up gain readings immediately.`;
+      }
+      if (noReadings && !rubyHintShown) {
+        rubyHintShown = true;
+        toast(
+          `${rubyLabel}: nothing to annotate yet in this text. Look words up while reading (Look up in dictionaries) - their readings appear here instantly.`,
+          'info',
+        );
+      }
+    }
+  };
   renderBody();
+
+  const goToPage = (next) => {
+    const target = Math.min(pages.length, Math.max(1, next));
+    if (target === currentPage) return;
+    currentPage = target;
+    renderBody();
+    const y = (body.getBoundingClientRect().top ?? 0) + window.scrollY - 70;
+    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+    savePosition();
+  };
+  container.querySelector('#pg-prev')?.addEventListener('click', () => goToPage(currentPage - 1));
+  container.querySelector('#pg-next')?.addEventListener('click', () => goToPage(currentPage + 1));
+  const onKey = (e) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+    if (!container.isConnected) return;
+    if (e.key === 'ArrowLeft') goToPage(currentPage - 1);
+    if (e.key === 'ArrowRight') goToPage(currentPage + 1);
+  };
+  document.addEventListener('keydown', onKey);
 
   // Ruby toggle: hides/shows the <rt> readings. The annotation text stays
   // parsed out of the body either way - the inline parenthetical form is
@@ -322,12 +428,25 @@ export async function renderReader(container, params) {
   }
 
   // Position restore + autosave -------------------------------------------------
-  if (savedPosition.scrollTop) {
+  // New format restores the page (and scrolls within it); the legacy
+  // scroll-only format is honored for old saves by scrolling on page 1.
+  if (savedPosition.scrollTop && currentPage === 1) {
     requestAnimationFrame(() => window.scrollTo({ top: savedPosition.scrollTop }));
+  } else if (pages.length > 1) {
+    // Arriving on a saved page: put the top of the text at a comfortable
+    // position instead of the top of the document.
+    const y = (body.getBoundingClientRect().top ?? 0) + window.scrollY - 70;
+    if (currentPage > 1) requestAnimationFrame(() => window.scrollTo({ top: Math.max(0, y) }));
   }
 
   const savePosition = async () => {
-    const position = { scrollTop: Math.round(window.scrollY || 0), tokenIndex: firstVisibleTokenIndex() };
+    const page = pages[currentPage - 1] ?? { start: 0, end: clean.length };
+    const position = {
+      page: currentPage,
+      pages: pages.length,
+      percent: Math.round((page.end / Math.max(1, clean.length)) * 100),
+      scrollTop: Math.round(window.scrollY || 0),
+    };
     const encounters = [...sessionEncounters.values()].map((t) => ({ term: t.raw, entry_id: t.entryId ?? null }));
     sessionEncounters.clear();
     try {
@@ -344,22 +463,15 @@ export async function renderReader(container, params) {
   };
 
   const interval = setInterval(savePosition, 10000);
-  window.addEventListener('beforeunload', savePosition);
-  document.addEventListener('visibilitychange', () => {
+  const onBeforeUnload = () => savePosition();
+  const onVisibility = () => {
     if (document.visibilityState === 'hidden') savePosition();
-  });
+  };
+  window.addEventListener('beforeunload', onBeforeUnload);
+  document.addEventListener('visibilitychange', onVisibility);
 
   const sessionEncounters = new Map(); // norm -> {raw, entryId}
   const pendingEncounters = [];
-
-  function firstVisibleTokenIndex() {
-    const marks = body.querySelectorAll('.tok');
-    const y = window.scrollY + 100;
-    for (let i = 0; i < marks.length; i++) {
-      if (marks[i].offsetTop >= y) return i;
-    }
-    return 0;
-  }
 
   // Word panel -------------------------------------------------------------------
   const panel = container.querySelector('#word-panel');
@@ -448,8 +560,8 @@ export async function renderReader(container, params) {
   // Dictionary lookup chain: shared lexicon -> online dictionaries
   // (Wiktionary et al, attributed and cached) -> AI stays a separate,
   // explicit action below.
-  const lookups = new Map();
-
+  // (Declared above renderBody so a re-render after a lookup can merge the
+  // discovered readings into the ruby layer.)
   const doLookup = async (termRaw, norm) => {
     const content = container.querySelector('#wp-content');
     const btn = content?.querySelector('[data-lookup]');
@@ -462,6 +574,8 @@ export async function renderReader(container, params) {
     if (cached) {
       lookups.set(norm, cached);
       renderPanelContent(entriesByNorm.get(norm), termRaw, norm);
+      // A lookup can carry a reading: re-render the page so furigana shows it.
+      renderBody();
       return;
     }
     try {
@@ -472,6 +586,7 @@ export async function renderReader(container, params) {
       lookups.set(norm, data);
       await cacheLookup(language, norm, data);
       renderPanelContent(entriesByNorm.get(norm), termRaw, norm);
+      renderBody();
     } catch (err) {
       toast(err.message ?? 'The lookup failed (offline?).', 'neg');
       if (btn) {
@@ -517,8 +632,6 @@ export async function renderReader(container, params) {
         ${rows}
       </div>`;
   };
-
-  const enrichments = new Map();
 
   const addWord = async (termRaw, norm) => {
     try {
@@ -608,6 +721,8 @@ export async function renderReader(container, params) {
     if (cached) {
       enrichments.set(norm, cached);
       renderPanelContent(entry, termRaw, norm);
+      // An AI analysis carries a reading: re-render so furigana shows it.
+      renderBody();
       return;
     }
     try {
@@ -620,6 +735,7 @@ export async function renderReader(container, params) {
       enrichments.set(norm, payload);
       await cacheEnrichment(language, norm, payload);
       renderPanelContent(entry, termRaw, norm);
+      renderBody();
     } catch (err) {
       if (err.code === 'rate-limited') toast(err.message, 'warn');
       else toast(err.message ?? 'Enrichment failed.', 'neg');
@@ -669,14 +785,15 @@ export async function renderReader(container, params) {
     const str = sel?.toString()?.trim() ?? '';
     return str && selContains(body, sel) ? str : null;
   };
-  document.addEventListener('selectionchange', () => {
+  const onSelectionChange = () => {
     const str = currentSelection();
     if (!str || str.length > 400) {
       selectionBar.hidden = true;
       return;
     }
     selectionBar.hidden = false;
-  });
+  };
+  document.addEventListener('selectionchange', onSelectionChange);
   selectionBar.querySelector('[data-sel-lookup]').addEventListener('click', () => {
     const str = currentSelection();
     if (str) openPanel(str);
@@ -804,30 +921,51 @@ export async function renderReader(container, params) {
   });
 
   return () => {
+    // Leave nothing behind: the reader adds document/window-level listeners
+    // (keyboard paging, autosave, selection bar) that MUST go when the view
+    // is left - a second text open would otherwise stack another set.
     clearInterval(interval);
     savePosition();
     if (stopListen) stopListen();
+    document.removeEventListener('keydown', onKey);
+    document.removeEventListener('selectionchange', onSelectionChange);
+    window.removeEventListener('beforeunload', onBeforeUnload);
+    document.removeEventListener('visibilitychange', onVisibility);
   };
 }
 
-function renderTokens(body, text, tokenizer, classify, rtl, { dictionary = null, rubyMarks = [], vocabReadings = null, showRuby = false } = {}) {
+function renderTokens(
+  body,
+  text,
+  tokenizer,
+  classify,
+  rtl,
+  { dictionary = null, rubyMarks = [], vocabReadings = null, showRuby = false, pageStart = 0, pageEnd = null } = {},
+) {
   const frag = document.createDocumentFragment();
   // Marks sorted by offset; lookup of the mark covering a token position.
+  // Offsets are GLOBAL (into the whole cleaned text): the page slice is
+  // shifted back into global coordinates so annotated readings survive
+  // pagination.
   const marksByStart = [...rubyMarks].sort((a, b) => a.baseStart - b.baseStart);
   const markAt = (pos) => marksByStart.find((m) => pos >= m.baseStart && pos < m.baseEnd) ?? null;
 
+  const pageText = text.slice(pageStart, pageEnd == null ? text.length : pageEnd);
+
   // Sentences are wrapped so listening mode can highlight and scroll to one.
-  for (const b of sentenceBounds(text)) {
+  for (const b of sentenceBounds(pageText)) {
     const sent = document.createElement('span');
     sent.className = 'sent';
     let last = b.start;
-    const tokens = tokenize(text.slice(b.start, b.end), tokenizer, dictionary);
+    const tokens = tokenize(pageText.slice(b.start, b.end), tokenizer, dictionary);
     let i = 0;
     while (i < tokens.length) {
       const tok = tokens[i];
-      const absStart = b.start + tok.start;
-      const absEnd = b.start + tok.end;
-      if (absStart > last) sent.appendChild(document.createTextNode(text.slice(last, absStart)));
+      const absStart = pageStart + b.start + tok.start;
+      const absEnd = pageStart + b.start + tok.end;
+      const sentStart = b.start + tok.start;
+      const sentEnd = b.start + tok.end;
+      if (sentStart > last) sent.appendChild(document.createTextNode(pageText.slice(last, sentStart)));
 
       const mark = markAt(absStart);
       if (mark && absEnd <= mark.baseEnd) {
@@ -836,14 +974,14 @@ function renderTokens(body, text, tokenizer, classify, rtl, { dictionary = null,
         const ruby = document.createElement('ruby');
         ruby.className = 'rb rb-annotated';
         let j = i;
-        let end = absEnd;
+        let end = sentEnd;
         while (j < tokens.length) {
           const t = tokens[j];
-          const s = b.start + t.start;
-          const e = b.start + t.end;
+          const s = pageStart + b.start + t.start;
+          const e = pageStart + b.start + t.end;
           if (s >= mark.baseEnd) break;
-          ruby.appendChild(tokenSpan(t, tokenizer, classify, text));
-          end = Math.max(end, Math.min(e, mark.baseEnd));
+          ruby.appendChild(tokenSpan(t, tokenizer, classify));
+          end = Math.max(end, Math.min(b.start + t.end, pageText.length));
           j += 1;
         }
         const rt = document.createElement('rt');
@@ -856,27 +994,35 @@ function renderTokens(body, text, tokenizer, classify, rtl, { dictionary = null,
         continue;
       }
 
-      // Vocabulary ruby: a reading the learner's data already carries.
+      // Vocabulary ruby: a reading the learner's data (or a lookup / AI
+      // analysis cached this session) already carries.
       const norm = normalizeTerm(tok.text, tokenizer);
       const reading = showRuby && vocabReadings ? vocabReadings.get(norm) ?? vocabReadings.get(tok.text) : null;
       if (reading) {
         const ruby = document.createElement('ruby');
         ruby.className = 'rb rb-vocab';
-        ruby.appendChild(tokenSpan(tok, tokenizer, classify, text));
+        ruby.appendChild(tokenSpan(tok, tokenizer, classify));
         const rt = document.createElement('rt');
         rt.textContent = reading;
         ruby.appendChild(rt);
         sent.appendChild(ruby);
       } else {
-        sent.appendChild(tokenSpan(tok, tokenizer, classify, text));
+        sent.appendChild(tokenSpan(tok, tokenizer, classify));
       }
-      last = absEnd;
+      last = sentEnd;
       i += 1;
     }
-    if (last < b.end) sent.appendChild(document.createTextNode(text.slice(last, b.end)));
+    if (last < b.end) sent.appendChild(document.createTextNode(pageText.slice(last, b.end)));
     frag.appendChild(sent);
   }
   body.replaceChildren(frag);
+}
+
+function fmtLen2(chars) {
+  const n = Math.max(0, Number(chars) || 0);
+  if (n >= 100000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1000) return `${(Math.round(n / 100) / 10).toFixed(1)}k`;
+  return String(n);
 }
 
 function tokenSpan(tok, tokenizer, classify) {

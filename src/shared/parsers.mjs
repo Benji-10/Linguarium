@@ -299,3 +299,42 @@ export function toJson(collection) {
     2,
   );
 }
+
+/**
+ * Split a text into readable pages for the reader (Apple-Books-style long
+ * books): accumulate whole paragraphs (newline boundaries) up to `target`
+ * characters; a paragraph longer than the target is cut at a sentence
+ * boundary. Returns [{ start, end }] offsets into the original string.
+ * Always >= 1 page; short texts produce a single page and render exactly as
+ * the pre-pagination reader did. Pure and browser/Node safe.
+ */
+export function paginate(text, target = 1800) {
+  const s = String(text ?? '');
+  if (!s) return [{ start: 0, end: 0 }];
+  const out = [];
+  let cursor = 0;
+  while (cursor < s.length) {
+    let end = Math.min(s.length, cursor + target);
+    if (end < s.length) {
+      // Prefer cutting at a paragraph break, then a sentence end.
+      const paraBreak = s.lastIndexOf('\n', end);
+      if (paraBreak > cursor + target * 0.4) {
+        end = paraBreak;
+      } else {
+        const sentence = Math.max(
+          s.lastIndexOf('. ', end),
+          s.lastIndexOf('。', end),
+          s.lastIndexOf('！', end),
+          s.lastIndexOf('？', end),
+          s.lastIndexOf('! ', end),
+          s.lastIndexOf('? ', end),
+        );
+        if (sentence > cursor + target * 0.4) end = Math.min(sentence + 1, s.length);
+      }
+    }
+    if (end <= cursor) end = Math.min(s.length, cursor + target); // pathological: hard cut
+    out.push({ start: cursor, end });
+    cursor = end;
+  }
+  return out.length > 0 ? out : [{ start: 0, end: s.length }];
+}

@@ -103,11 +103,16 @@ CREATE TABLE IF NOT EXISTS user_data.language_profiles (
   language_code  TEXT NOT NULL,
   difficulty_mode TEXT NOT NULL DEFAULT 'stretch',
   gloss_language  TEXT NOT NULL DEFAULT 'en',
+  level          TEXT, -- self-declared proficiency: complete-beginner | beginner | intermediate | advanced | fluent
   active         BOOLEAN NOT NULL DEFAULT TRUE,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (user_id, language_code)
 );
+
+-- Migration guard for databases initialized before the level column existed
+-- (re-running is a no-op; seed.sql repeats it for seed-only runs).
+ALTER TABLE user_data.language_profiles ADD COLUMN IF NOT EXISTS level TEXT;
 
 CREATE TABLE IF NOT EXISTS user_data.collections (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

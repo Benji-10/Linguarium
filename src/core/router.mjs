@@ -53,8 +53,8 @@ async function render() {
   const state = getState();
   const found = match(location.hash);
   const target = found ?? match('#/');
-  const container = document.getElementById('view');
-  if (!container) return;
+  const stale = document.getElementById('view');
+  if (!stale) return;
 
   if (currentCleanup) {
     try {
@@ -66,9 +66,19 @@ async function render() {
   }
 
   if (!target) {
-    container.innerHTML = '<section class="panel"><h1>Page not found</h1><p>That page does not exist.</p></section>';
+    stale.innerHTML = '<section class="panel"><h1>Page not found</h1><p>That page does not exist.</p></section>';
     return;
   }
+
+  // FRESH container per render. A slow view (e.g. Discover fetching bodies)
+  // that resolves AFTER the user navigated away still holds the OLD element:
+  // its late writes land in a detached node and cannot clobber the newly
+  // rendered view. This is the structural fix for the "click Discover, then
+  // Reading, and Discover eventually loads over it" race.
+  const container = document.createElement('main');
+  container.id = 'view';
+  container.className = `view view-${target.route.segments[0]?.replace(':', '') || 'home'}`;
+  stale.replaceWith(container);
 
   if (!state.user && !target.route.options.public) {
     const { renderAuth } = await import('../views/auth.mjs');
@@ -76,7 +86,6 @@ async function render() {
     return;
   }
 
-  container.className = `view view-${target.route.segments[0]?.replace(':', '') || 'home'}`;
   try {
     currentCleanup = (await target.route.view(container, target.params)) ?? null;
   } catch (err) {

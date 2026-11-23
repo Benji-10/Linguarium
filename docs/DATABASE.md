@@ -95,9 +95,16 @@ user content):
    single atomic transaction, falling back to statement-by-statement execution
    when it meets pre-existing objects. Timing-safe key comparison; without
    `ADMIN_KEY` the endpoint answers 404.
-2. **Locally:** `npm run db:init` (schema + seed) or `npm run db:seed` (seed only).
+2. **Automatically on deploy:** the Netlify build command runs `node scripts/db-auto.mjs`
+   after bundling the app. It hashes `sql/schema.sql` + `sql/seed.sql`; when the hash
+   differs from the one stored in `knowledge.db_state` (key `schema+seed`), it applies
+   both files with the same idempotent runner as `db:init` and records the new hash.
+   Unchanged SQL → no-op; no `DATABASE_URL` → skip; a database error never fails the
+   deploy (a warning lands in the build log; `--strict` flips that for local use).
+3. **Locally:** `npm run db:init` (schema + seed) or `npm run db:seed` (seed only),
+   or `npm run db:auto` (the hash-guarded sync; `--force` re-applies).
    `node scripts/db-init.mjs --dry-run` validates the SQL files without a database.
-3. **Neon SQL editor:** paste `sql/schema.sql` followed by `sql/seed.sql`.
+4. **Neon SQL editor:** paste `sql/schema.sql` followed by `sql/seed.sql`.
 
 Everything is idempotent (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING` on natural
 keys: language+title for texts, language+name for grammar structures), so
@@ -105,6 +112,24 @@ re-running any of these on a populated database is safe and duplicates nothing.
 Statement splitting is shared between the local script and the admin function
 (`netlify/functions/lib/sqlsplit.mjs`), which is dollar-quote aware, so seed
 bodies may contain semicolons and apostrophes freely.
+
+## Hardening-round additions (applied idempotently by the same seed)
+
+- `knowledge.db_state` — one row per build-time migration key (`schema+seed`):
+   the content hash of the SQL files last applied by `scripts/db-auto.mjs`, so a
+   re-deploy of unchanged SQL is a no-op. Bookkeeping only, no user data.
+- `user_data.language_profiles.level` — self-declared proficiency per language
+   (`complete-beginner` / `beginner` / `intermediate` / `advanced` / `fluent`,
+   NULL = not declared). A starting-point statement the learner owns (Settings
+   shows a transparent vocabulary-count suggestion next to it, never applied
+   automatically); it defaults the AI generator's difficulty band and is
+   displayed honestly next to the knowledge-state-based difficulty estimates,
+   which remain computed, not declared.
+- ~290 reading-bearing `knowledge.lexicon` entries for Japanese (everyday plus
+  Meiji-era literary forms) and Chinese (HSK 3–4 everyday) — they widen both the
+  dictionary segmentation and the furigana/pinyin ruby layer for imported texts
+  that carry no inline annotations. Community provenance, verify note included,
+  exactly like the core lexicon block.
 
 ## Phase 3 additions (all applied idempotently by re-running the seed)
 

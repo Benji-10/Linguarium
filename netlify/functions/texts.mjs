@@ -50,7 +50,36 @@ export default handler({
              length(body)::int AS body_length, created_at
       FROM knowledge.shared_texts
       ORDER BY created_at`;
-    return json({ texts: mine, shared });
+
+    // with_bodies=1&language=xx: body SAMPLES for the difficulty estimator in
+    // Discover (one call instead of N+1 detail fetches). The first 12,000
+    // characters are plenty for an honest estimate; the full body is only
+    // ever loaded when a text is opened in the reader.
+    const extras = {};
+    if (q.with_bodies === '1' && q.language) {
+      const langRows = await sql()`SELECT code FROM knowledge.languages WHERE code = ${q.language}`;
+      if (langRows.length === 0) throw new HttpError(404, 'language-not-found', 'Unknown language code.');
+      const [sharedBodies, userBodies] = await Promise.all([
+        sql()`
+          SELECT id, left(body, 12000) AS body
+          FROM knowledge.shared_texts
+          WHERE language_code = ${q.language}
+          ORDER BY created_at
+          LIMIT 20`,
+        sql()`
+          SELECT id, left(body, 12000) AS body
+          FROM user_data.texts
+          WHERE user_id = ${user.id} AND language_code = ${q.language} AND deleted_at IS NULL
+          ORDER BY updated_at DESC
+          LIMIT 20`,
+      ]);
+      extras.score_bodies = {
+        note: 'First 12,000 characters per text - samples for difficulty estimation, not the full bodies.',
+        shared: sharedBodies,
+        user: userBodies,
+      };
+    }
+    return json({ texts: mine, shared, ...extras });
   },
 
   POST: async (req) => {

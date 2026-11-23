@@ -92,6 +92,26 @@ export const DIFFICULTY_MODES = {
   },
 };
 
+/**
+ * Self-declared proficiency level, one per language profile.
+ *
+ * This is the learner's own starting-point statement ("I am a complete beginner
+ * in Korean but fluent in French") - it is NOT a computed CEFR label and it
+ * never overrides the knowledge-state-based difficulty estimates. It shapes
+ * defaults: the AI generator's starting difficulty band, and how the app
+ * explains your numbers next to the declared level (Settings shows the
+ * estimate your vocabulary suggests, so you can correct yourself honestly).
+ */
+export const PROFICIENCY_LEVELS = [
+  { value: 'complete-beginner', label: 'Complete beginner', hint: 'starting from zero', band: 'comfortable' },
+  { value: 'beginner', label: 'Beginner', hint: 'some basic words and phrases', band: 'comfortable' },
+  { value: 'intermediate', label: 'Intermediate', hint: 'everyday reading and conversation', band: 'stretch' },
+  { value: 'advanced', label: 'Advanced', hint: 'real material with effort', band: 'challenge' },
+  { value: 'fluent', label: 'Fluent / near-native', hint: 'comfortable in most contexts', band: 'challenge' },
+];
+
+export const PROFICIENCY_VALUES = PROFICIENCY_LEVELS.map((l) => l.value);
+
 /** Grammar / structure learning progression (four layers). */
 export const GRAMMAR_STAGES = [
   'encountered',

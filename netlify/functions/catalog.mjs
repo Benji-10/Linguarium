@@ -18,11 +18,14 @@ import {
   PROVIDERS,
   NEWS_FEEDS,
   GUTENDEX_SEARCH_URL,
+  GUTENDEX_BROWSE_URL,
   MW_SEARCH_URL,
   mapGutendex,
+  gutendexPageInfo,
   mapMediawikiSearch,
   parseRss,
   fetchJson,
+  fetchJsonRetry,
   fetchText,
 } from './lib/sources.mjs';
 
@@ -73,12 +76,55 @@ export default handler({
     }
 
     if (provider === 'gutenberg') {
-      // Gutendex search; results already carry per-book language codes.
-      const url = GUTENDEX_SEARCH_URL(search, language);
-      const data = await fetchJson(url, { timeoutMs: 20000 });
+      // Gutendex routes: browsing by language (/books/?languages=xx&page=N)
+      // is fast and reliable; free-text search is NOT (it can stall the
+      // upstream for minutes - reproduced 2026-11), so it gets a short
+      // timeout and falls back to a filtered browse of the language shelf.
+      const page = Math.min(100, Math.max(1, Number(q.page) || 1));
+      let data = null;
+      let note = null;
+      if (search) {
+        try {
+          data = await fetchJsonRetry(GUTENDEX_SEARCH_URL(search, language, page), {
+            timeoutMs: 9000,
+            maxBytes: 2 * 1024 * 1024,
+          });
+        } catch {
+          data = await fetchJsonRetry(GUTENDEX_BROWSE_URL(language, 1), {
+            timeoutMs: 12000,
+            maxBytes: 2 * 1024 * 1024,
+          });
+          note =
+            "Project Gutenberg's search is slow right now - showing the " +
+            `${language} public-domain shelf instead; the filter below applied your words to titles and authors on it.`;
+        }
+      } else {
+        data = await fetchJsonRetry(GUTENDEX_BROWSE_URL(language, page), {
+          timeoutMs: 12000,
+          maxBytes: 2 * 1024 * 1024,
+        });
+      }
       let items = mapGutendex(data);
+      if (note && search) {
+        const needle = search.toLowerCase();
+        items = items.filter(
+          (it) =>
+            (it.title ?? '').toLowerCase().includes(needle) ||
+            (it.author ?? '').toLowerCase().includes(needle),
+        );
+      }
+      // The shelf itself may mix languages; the active language wins.
       items = items.filter((it) => it.language === language);
-      return json({ provider, language, query: search, items });
+      const pageInfo = gutendexPageInfo(data);
+      return json({
+        provider,
+        language,
+        query: search,
+        page,
+        pages: pageInfo,
+        note,
+        items,
+      });
     }
 
     if (PROVIDER_PROJECTS[provider]) {

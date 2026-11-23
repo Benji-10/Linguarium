@@ -16,6 +16,10 @@ import {
   extractFromMwExtracts,
   extractFromMwParse,
   parseRss,
+  GUTENDEX_BROWSE_URL,
+  GUTENDEX_SEARCH_URL,
+  GUTENBERG_TEXT_URLS,
+  gutendexPageInfo,
 } from '../netlify/functions/lib/sources.mjs';
 
 test('ssrf guard blocks private and odd targets', () => {
@@ -153,4 +157,34 @@ test('rss 2.0 and atom feeds parse into honest items', () => {
   assert.equal(atomItems.length, 1);
   assert.equal(atomItems[0].title, 'Atom item');
   assert.equal(atomItems[0].source_url, 'https://example.com/b1');
+});
+
+test('gutendex URLs use the fast route: trailing slash + explicit page', () => {
+  // Reproduced 2026-11: gutendex.com/books?languages=ja (no slash, no page)
+  // hangs for minutes; /books/?languages=ja&page=1 answers in ~250ms.
+  const browse = GUTENDEX_BROWSE_URL('ja', 1);
+  assert.equal(browse, 'https://gutendex.com/books/?languages=ja&page=1');
+  const browseEn = GUTENDEX_BROWSE_URL('en');
+  assert.equal(browseEn, 'https://gutendex.com/books/?page=1');
+  const search = GUTENDEX_SEARCH_URL('Stars', 'ja', 1);
+  assert.equal(search, 'https://gutendex.com/books/?search=Stars&languages=ja&page=1');
+  // page is clamped
+  assert.ok(GUTENDEX_BROWSE_URL('ja', 999).endsWith('page=100'));
+  assert.ok(GUTENDEX_BROWSE_URL('ja', -4).endsWith('page=1'));
+});
+
+test('gutendexPageInfo maps next/previous/count defensively', () => {
+  assert.deepEqual(gutendexPageInfo({ count: 75, next: 'https://x', previous: null }), {
+    count: 75,
+    next: true,
+    previous: false,
+  });
+  assert.deepEqual(gutendexPageInfo({}), { count: null, next: false, previous: false });
+});
+
+test('gutenberg text candidates put the reliable mirror first', () => {
+  const urls = GUTENBERG_TEXT_URLS(1342);
+  assert.equal(urls[0], 'https://gutenberg.pglaf.org/cache/epub/1342/pg1342.txt');
+  assert.ok(urls.includes('https://www.gutenberg.org/cache/epub/1342/pg1342.txt'));
+  assert.ok(urls.includes('https://www.gutenberg.org/files/1342/1342-0.txt'));
 });

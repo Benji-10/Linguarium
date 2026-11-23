@@ -3,7 +3,12 @@
 # All privileged operations (database, auth, AI) live in Netlify Functions.
 
 [build]
-  command = "npm run build"
+  # The app builds into dist/, then the database syncs itself: scripts/db-auto.mjs
+  # applies sql/schema.sql + sql/seed.sql whenever their contents changed (a
+  # content hash is stored in knowledge.db_state; unchanged SQL is a no-op).
+  # It skips silently when DATABASE_URL is not set and NEVER fails a deploy
+  # because of a database hiccup (warnings land in the build log instead).
+  command = "npm run build && node scripts/db-auto.mjs"
   publish = "dist"
 
 # Node 22 is required: @neondatabase/serverless needs >= 19 and the build tooling

@@ -78,6 +78,20 @@ material). The platform's content rules apply in full:
   letter), the length band, the target difficulty band, the language name, and two
   bounded term lists (this learner's known terms and in-learning terms) — nothing
   else from their data.
+- **Lengths are hard word-count requirements**, not adjectives: short 200–350,
+  medium 450–700, long 1000–1500 words (or script equivalents), each with an
+  explicit floor ("do NOT stop before N words - write the FULL text"), and the
+  response carries an explicit `maxOutputTokens` budget so a long text is never
+  silently clipped to a stub.
+- **Topics can be left empty**: the server picks one from a curated pool
+  (engineering, magic, mystery, neighbours…) and checks the topics already
+  generated for this learner (`user_data.texts`, provenance `ai`) so nothing
+  repeats; when the pool is exhausted it resets and says so in the response
+  (`generation.auto_topic`, `generation.pool_reset`). The chosen topic is stored
+  on the text and reported back, so a daily story is one click.
+- The difficulty band defaults from the profile's **self-declared level** when the
+  learner has set one (complete beginner → comfortable … fluent → challenge);
+  it is still just a default the learner can override.
 - The prompt **bans the conventional AI register explicitly**: no "tapestry", "delve",
   "in the realm of"; no rule-of-three constructions; no summarizing or moralizing
   closing paragraph; varied sentence lengths; concrete detail; no lists inside prose;

@@ -6,7 +6,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sniffFormat, parseCsv, parseJson, parseTxt, parseImport, toCsv } from '../src/shared/parsers.mjs';
+import { sniffFormat, parseCsv, parseJson, parseTxt, parseImport, toCsv, paginate } from '../src/shared/parsers.mjs';
 
 test('format sniffing', () => {
   assert.equal(sniffFormat('[{"term":"a"}]'), 'json');
@@ -113,4 +113,39 @@ test('csv export roundtrip', () => {
   assert.equal(back.items[0].term, 'maison');
   assert.equal(back.items[0].definition, 'house, home');
   assert.equal(back.items[0].extra.reading, '/mɛzɔ/');
+});
+
+test('paginate: short text is one page, offsets cover the whole text', () => {
+  const pages = paginate('Hello world.', 1800);
+  assert.deepEqual(pages, [{ start: 0, end: 12 }]);
+  assert.deepEqual(paginate(''), [{ start: 0, end: 0 }]);
+});
+
+test('paginate: long text splits at paragraph boundaries under the target', () => {
+  const paras = [];
+  for (let i = 0; i < 40; i++) paras.push(`Paragraph ${i} with some words here.`);
+  const text = paras.join('\n');
+  const pages = paginate(text, 200);
+  assert.ok(pages.length > 1, 'should produce several pages');
+  // pages tile the text without gaps or overlaps
+  for (let i = 0; i < pages.length; i++) {
+    assert.ok(pages[i].end > pages[i].start, `page ${i} non-empty`);
+    if (i > 0) assert.equal(pages[i].start, pages[i - 1].end, 'pages are contiguous');
+  }
+  assert.equal(pages[pages.length - 1].end, text.length);
+  // every cut lands on a paragraph boundary for this input
+  for (let i = 0; i < pages.length - 1; i++) {
+    assert.equal(text[pages[i].end], '\n', `cut ${i} at a newline`);
+  }
+});
+
+test('paginate: one huge paragraph is cut at a sentence boundary', () => {
+  const text = ('One sentence here. '.repeat(400)).trim();
+  const pages = paginate(text, 300);
+  assert.ok(pages.length > 1);
+  for (const p of pages) {
+    const slice = text.slice(p.start, p.end);
+    assert.ok(slice.length > 0);
+  }
+  assert.equal(pages[pages.length - 1].end, text.length);
 });

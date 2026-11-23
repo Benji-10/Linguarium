@@ -926,3 +926,45 @@ iframe[title='Netlify badge'] {
   .lexicon-row { grid-template-columns: 1fr; }
   .appearance-row { flex-direction: column; align-items: flex-start; }
 }
+
+/* ---------------------------------------------------------------- skeletons (Discover instant paint) */
+
+.skeleton-bar {
+  display: inline-block;
+  height: 12px;
+  border-radius: 6px;
+  background: var(--line);
+  opacity: 0.55;
+  animation: skel-pulse 1.4s ease-in-out infinite;
+  vertical-align: middle;
+}
+.skeleton-bar.short { height: 10px; margin-top: 6px; }
+.skeleton-bar.chip { width: 52px; height: 18px; border-radius: 999px; }
+.discover-row.skel .discover-main { display: grid; gap: 7px; }
+.discover-row.skel .discover-side { display: flex; gap: 6px; align-items: center; }
+@keyframes skel-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.25; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar { animation: none; }
+}
+
+/* ---------------------------------------------------------------- reader pagination */
+
+.reader-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 18px auto 6px;
+  max-width: 720px;
+}
+.reader-pager .pager-info { font-size: 0.85rem; color: var(--ink-faint); min-width: 150px; text-align: center; }
+.reader-progress {
+  position: sticky; bottom: 0; z-index: 5;
+  background: linear-gradient(to top, var(--bg) 62%, transparent);
+  padding-top: 14px;
+}
+.reader-progress .reader-pager { margin: 0 auto; padding-bottom: 10px; }

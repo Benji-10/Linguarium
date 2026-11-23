@@ -20,12 +20,12 @@ shipped, including the honest edges).
 | --- | --- |
 | **Accounts** | Fully custom authentication UI on Netlify Identity (login, signup with email confirmation, password recovery incl. reset flow, optional OAuth) — the default widget is never loaded. |
 | **Languages** | ~58 language presets with per-language tokenizer behaviour, plus **custom language definitions** (name, code, direction, tokenizer) so any language works, including constructed ones. |
-| **Profiles** | Per-language profile with difficulty mode (Comfortable / Stretch / Challenge) and gloss language — definitions are never assumed to be in English. |
+| **Profiles** | Per-language profile with difficulty mode (Comfortable / Stretch / Challenge), gloss language (definitions are never assumed to be in English) and a **self-declared level** (complete beginner → fluent — your own statement per language; Settings shows a transparent vocabulary-based suggestion next to it, never auto-applied). |
 | **Vocabulary** | Personal entries with provenance, readings, examples and your own notes; one shared knowledge state for reading, review and collections. |
 | **Collections** | Create and import word lists from CSV / JSON / plain text. **Unparsed entries are retained, not discarded**, shown for repair. Export to CSV/JSON any time. |
 | **FSRS review** | FSRS-5 spaced repetition with **three separate ability dimensions** (recognition, recall, production — production is typed, not multiple-choice). |
-| **Reading** | Interactive reader: click any word (**words, not characters, for Japanese/Chinese** — dictionary segmentation from the shared lexicon + your own vocabulary), keep it, self-assess prior knowledge honestly, see per-reader difficulty estimates with a transparent breakdown. **Furigana/pinyin render as real ruby** above the words (toggleable, never inline), and the library shows **only the language you are studying** — no cross-language mixing. |
-| **Import center** | Six ways to bring texts in: paste, upload `.txt`/`.html`/`.epub` (parsed in your browser), a URL (fetched server-side, previewed, you confirm the metadata), the **open library** (Project Gutenberg via Gutendex, Wikisource, Wikipedia, Wikinews, curated news RSS — all keyless free APIs in your study language, source author/license attached automatically), AI generation, and passages saved straight from other apps via the PWA **share target**. |
+| **Reading** | Interactive reader: click any word (**words, not characters, for Japanese/Chinese** — dictionary segmentation from the shared lexicon + your own vocabulary), keep it, self-assess prior knowledge honestly, see per-reader difficulty estimates with a transparent breakdown. **Furigana/pinyin render as real ruby** above the words (toggleable, never inline; readings also come from dictionary lookups and AI analyses made while reading, and the reader says so honestly when a text has no readings yet), and the library shows **only the language you are studying** — no cross-language mixing. **Long texts are paginated** (Apple-Books-style page turner with keyboard arrows, a page/percent readout and a per-page position save) so imported novels stay fast and comfortable. |
+| **Import center** | Six ways to bring texts in: paste, upload `.txt`/`.html`/`.epub` (parsed in your browser), a URL (fetched server-side, previewed, you confirm the metadata), the **open library** (Project Gutenberg via Gutendex, Wikisource, Wikipedia, Wikinews, curated news RSS — all keyless free APIs in your study language, source author/license attached automatically), AI generation, and passages saved straight from other apps via the PWA **share target**. The Gutenberg catalogue uses the fast Gutendex route (browse-by-language with pagination), its search degrades honestly to a filtered shelf when Gutendex's search stalls, and book texts fall back to the **pglaf.org mirror** when gutenberg.org throttles (both labelled). |
 | **Listening** | Read & listen: browser speech synthesis follows the transcript sentence by sentence (honestly labelled as synthesized, with live voice-availability reporting), or your own audio items referenced by https URL with mandatory source and licence metadata — never stored in the database. |
 | **Knowledge** | Vocabulary lookup with everything known about a term: entry, memory state per dimension, verified etymology when sourced, AI analysis clearly labelled separately, your notes — plus the **online dictionary chain** (shared lexicon → Wiktionary / dictionaryapi.dev, attributed and cached offline) with AI as the explicit fallback. |
 | **Word lookup** | Shared lexicon first, then **online dictionaries** (Wiktionary REST definitions for every language + dictionaryapi.dev for English — keyless, free, attributed with their licenses), cached server-side and offline in IndexedDB. The AI analysis stays an explicit, labelled, user-triggered action. |
@@ -112,8 +112,16 @@ grammar catalog and language presets appear. Three equivalent ways, pick one:
   Safe to call repeatedly: every statement is idempotent, and the endpoint only
   ever creates shared `knowledge` data and empty `user_data` tables — it can
   never touch user content. Without `ADMIN_KEY` the endpoint answers 404.
+- **Automatically on every deploy (recommended):** the Netlify build command runs
+  `node scripts/db-auto.mjs` after the bundle build: it hashes `sql/schema.sql` +
+  `sql/seed.sql`, and whenever they changed it applies them (the same idempotent
+  runner as `db:init`), recording the hash in `knowledge.db_state`. It skips
+  silently when `DATABASE_URL` is unset and never fails a deploy over a database
+  hiccup - warnings land in the build log. Pull a change that touches SQL and the
+  deploy syncs the database for you; nothing to run by hand.
 - **Locally:** `cp .env.example .env`, fill `DATABASE_URL`, then `npm run db:init`
-  (schema + seed) or `npm run db:seed` (seed only, after schema creation).
+  (schema + seed) or `npm run db:seed` (seed only, after schema creation), or
+  `npm run db:auto` (the hash-guarded sync the build uses; `--force` re-applies).
   `node scripts/db-init.mjs --dry-run` validates the SQL files without a database.
 - **In the Neon SQL editor:** paste the contents of `sql/schema.sql` followed by
   `sql/seed.sql`.
@@ -215,6 +223,9 @@ npm run db:init            # create schema + seed (npm run db:seed = seed only)
 # columns, community tables, lexicon starter entries and resource catalog.
 # The refinement round adds the lookup cache table and the Japanese/Chinese
 # core lexicon (readings for segmentation + ruby).
+# The hardening round adds the level column on language_profiles (self-declared
+# proficiency) and ~290 reading-bearing Japanese/Chinese lexicon entries.
+# Deployed sites need none of this: `npm run build` now ends with db-auto sync.
 npm run db:seed
 npm run dev                # netlify dev (via npx): dist + functions + local Identity
 ```

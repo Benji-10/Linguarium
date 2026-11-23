@@ -12,7 +12,7 @@ import { doLogout, doUpdateDisplayName, doPasswordChange, doRequestRecovery } fr
 import { flushQueue, refreshQueueCount, lastSyncTime } from '../core/sync.mjs';
 import { downloadExport } from '../core/api.mjs';
 import { clearAll } from '../core/idb.mjs';
-import { DIFFICULTY_MODES, DIMENSIONS } from '../shared/constants.mjs';
+import { DIFFICULTY_MODES, DIMENSIONS, PROFICIENCY_LEVELS } from '../shared/constants.mjs';
 import { currentMode, currentSkin, setMode, setSkin, SKINS } from '../core/theme.mjs';
 import { configureWeights, resetWeights, usingCustomWeights } from '../shared/fsrs.mjs';
 
@@ -33,7 +33,7 @@ export async function renderSettings(container) {
 
       <section class="panel">
         <div class="panel-head"><h2>${icon('globe')}Language profiles</h2></div>
-        <p class="muted small">One profile per language you study. The difficulty mode steers recommendations; the gloss language is the language definitions are written in (never assumed to be English).</p>
+        <p class="muted small">One profile per language you study. Declare your level per language (complete beginner in Korean, fluent in French - whatever is true for you); the difficulty mode steers recommendations, the gloss language is the language definitions are written in (never assumed to be English).</p>
         <div class="profile-rows">
           ${(s.profiles ?? []).map((p) => profileRowHtml(p, glossOptions)).join('') || '<p class="muted small">No profiles yet - add your first language below.</p>'}
         </div>
@@ -200,6 +200,19 @@ export async function renderSettings(container) {
           toast('Gloss language saved.', 'pos');
         } catch (err) {
           toast(err.message ?? 'Could not save the gloss language.', 'neg');
+        }
+      });
+      row.querySelector('.pm-level')?.addEventListener('change', async (e) => {
+        const value = e.target.value || null;
+        try {
+          await api('/api/profiles', {
+            method: 'PUT',
+            body: { language_code: code, level: value },
+          });
+          await loadProfiles();
+          toast(value ? `Level saved: ${e.target.selectedOptions[0]?.textContent ?? value}.` : 'Level cleared.', 'pos');
+        } catch (err) {
+          toast(err.message ?? 'Could not save the level.', 'neg');
         }
       });
       row.querySelector('.pm-remove')?.addEventListener('click', async () => {
@@ -603,14 +616,29 @@ function profileRowHtml(p, glossOptions) {
   const modes = Object.entries(DIFFICULTY_MODES)
     .map(([value, def]) => `<option value="${value}" ${p.difficulty_mode === value ? 'selected' : ''}>${def.label}</option>`)
     .join('');
+  // A rough, transparent hint from the learner's own vocabulary for this
+  // language - never a CEFR claim, and never auto-applied.
+  const langEntries = (s.entries ?? []).filter((e) => e.language_code === p.language_code);
+  const suggestion =
+    langEntries.length >= 800 ? 'fluent' : langEntries.length >= 300 ? 'advanced' : langEntries.length >= 75 ? 'intermediate' : langEntries.length >= 15 ? 'beginner' : 'complete-beginner';
+  const levelOptions = [
+    `<option value="" ${p.level ? '' : 'selected'}>not declared</option>`,
+    ...PROFICIENCY_LEVELS.map(
+      (l) => `<option value="${l.value}" ${p.level === l.value ? 'selected' : ''}>${l.label} - ${l.hint}</option>`,
+    ),
+  ].join('');
   return `
   <div class="profile-row" data-lang="${esc(p.language_code)}">
     <div class="profile-main">
       <strong>${esc(lang?.name ?? p.language_code)}</strong>
       <span class="muted small">${esc(p.language_code)}${lang?.native_name ? ` - ${esc(lang.native_name)}` : ''}</span>
       ${s.activeLanguage === p.language_code ? '<span class="badge pos">active</span>' : `<button class="btn subtle small" data-set-active="${esc(p.language_code)}">Set active</button>`}
+      <span class="muted small" title="A transparent hint, never auto-applied - declare what is true for you.">your vocabulary here: ${langEntries.length} terms - rough suggestion: ${esc(PROFICIENCY_LEVELS.find((l) => l.value === suggestion)?.label ?? suggestion)}</span>
     </div>
     <div class="profile-controls">
+      <label>Your level
+        <select class="pm-level">${levelOptions}</select>
+      </label>
       <label>Mode
         <select class="pm-mode">${modes}</select>
       </label>

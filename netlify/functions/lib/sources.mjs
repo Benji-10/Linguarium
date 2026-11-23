@@ -46,13 +46,13 @@ export function ssrfSafeUrl(raw) {
 }
 
 /** Fetch with SSRF validation, redirect cap, size cap and a timeout. */
-export async function safeFetch(rawUrl, { timeoutMs = 20000, maxBytes = 8 * 1024 * 1024, maxRedirects = 3 } = {}) {
+export async function safeFetch(rawUrl, opts) {
   let url = ssrfSafeUrl(rawUrl);
-  for (let hop = 0; hop <= maxRedirects; hop += 1) {
+  for (let hop = 0; hop <= (opts?.maxRedirects ?? 3); hop += 1) {
     const res = await fetch(url, {
       redirect: 'manual',
       headers: { 'User-Agent': 'Linguarium/0.1 (language-learning reading app)' },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(opts?.timeoutMs ?? 20000),
     });
     const location = res.headers.get('location');
     if (res.status >= 300 && res.status < 400 && location) {
@@ -74,6 +74,61 @@ export async function fetchText(rawUrl, opts) {
   const res = await safeFetch(rawUrl, opts);
   if (!res.ok) throw new Error(`source responded ${res.status}`);
   return res.text();
+}
+
+/** Retry a JSON fetch once on transient failures (Cloudflare 403 challenges,
+ * 5xx, network aborts). Gutendex sits behind Cloudflare and occasionally
+ *  challenges a datacenter request that a second attempt passes. */
+export async function fetchJsonRetry(rawUrl, { attempts = 2, backoffMs = 900, ...opts } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetchJson(rawUrl, opts);
+    } catch (err) {
+      lastError = err;
+      const transient = /responded (403|429|5\d\d)|aborted|TimeoutError|fetch failed|network/i.test(
+        String(err?.message ?? err),
+      );
+      if (!transient || attempt === attempts - 1) throw lastError;
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastError;
+}
+
+/** Stream a text body with a BYTE cap and stop early once the cap is reached
+ *  (used for Gutenberg books: the reader imports at most the first slice
+ *  anyway, so a capped download saves minutes on multi-megabyte books).
+ *  Returns { text, capped } - `capped` says the source was longer. */
+export async function fetchTextCapped(rawUrl, { timeoutMs = 30000, maxBytes = 700 * 1024 } = {}) {
+  const res = await safeFetch(rawUrl, { timeoutMs, maxBytes });
+  if (!res.ok) throw new Error(`source responded ${res.status}`);
+  if (!res.body) {
+    const text = await res.text();
+    return { text, capped: text.length > maxBytes };
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: false });
+  let received = 0;
+  let out = '';
+  let capped = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    out += decoder.decode(value, { stream: true });
+    if (received >= maxBytes) {
+      capped = true;
+      try {
+        await reader.cancel();
+      } catch {
+        /* already closed */
+      }
+      break;
+    }
+  }
+  if (!capped) out += decoder.decode();
+  return { text: out, capped };
 }
 
 export async function fetchJson(rawUrl, opts) {
@@ -230,14 +285,43 @@ export function mapGutendex(json) {
   }));
 }
 
-export const GUTENDEX_SEARCH_URL = (q, language) => {
+/** Page info from a Gutendex response: { count, next, previous } . */
+export function gutendexPageInfo(json) {
+  return {
+    count: Number.isFinite(json?.count) ? json.count : null,
+    next: typeof json?.next === 'string' && json.next ? true : false,
+    previous: typeof json?.previous === 'string' && json.previous ? true : false,
+  };
+}
+
+/** Fast Gutendex route: the trailing slash AND an explicit page param are
+ *  both required - `?languages=ja` alone hangs the upstream for minutes
+ *  (reproduced 2026-11), while `/books/?languages=ja&page=1` answers in
+ *  ~250 ms. `?search=...` is NOT reliably fast; callers must set a short
+ *  timeout and fall back to the language browse when it stalls. */
+export const GUTENDEX_BROWSE_URL = (language, page = 1) => {
+  const params = new URLSearchParams();
+  if (language && language !== 'en') params.set('languages', language);
+  params.set('page', String(Math.min(100, Math.max(1, page || 1))));
+  return `https://gutendex.com/books/?${params.toString()}`;
+};
+
+export const GUTENDEX_SEARCH_URL = (q, language, page = 1) => {
   const params = new URLSearchParams();
   if (q && q.trim()) params.set('search', q.trim().slice(0, 200));
   if (language && language !== 'en') params.set('languages', language);
-  return `https://gutendex.com/books?${params.toString()}`;
+  params.set('page', String(Math.min(100, Math.max(1, page || 1))));
+  return `https://gutendex.com/books/?${params.toString()}`;
 };
 
+export const GUTENDEX_BOOK_URL = (id) => `https://gutendex.com/books/${encodeURIComponent(id)}/`;
+
+/** Gutenberg book-text candidates, in try order. gutenberg.org 503-throttles
+ *  datacenter traffic (fails in ~1 s, cheap to try); the pglaf.org mirror
+ *  serves the same /cache/epub path reliably but slowly, so it gets a long
+ *  timeout and comes first - a working mirror beats a fast refusal. */
 export const GUTENBERG_TEXT_URLS = (id) => [
+  `https://gutenberg.pglaf.org/cache/epub/${id}/pg${id}.txt`,
   `https://www.gutenberg.org/cache/epub/${id}/pg${id}.txt`,
   `https://www.gutenberg.org/files/${id}/${id}-0.txt`,
 ];

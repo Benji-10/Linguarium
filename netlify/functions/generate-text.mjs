@@ -18,7 +18,12 @@ import { sql } from './lib/db.mjs';
 import { consumeDailyQuota } from './lib/ratelimit.mjs';
 import { GEMINI_MODEL } from './ai-status.mjs';
 
-const MAX_OUTPUT_CHARS = 20000;
+const MAX_OUTPUT_CHARS = 40000;
+
+// Output token budget: JSON mode + a high ceiling so a 'long' text is never
+// clipped by the default (a clipped JSON response = the short texts users
+// reported). 8192 tokens comfortably fits 1,500 words in any script.
+const MAX_OUTPUT_TOKENS = 8192;
 
 const KINDS = {
   story: {
@@ -48,10 +53,12 @@ const KINDS = {
   },
 };
 
+// Word counts are HARD minimums, not adjectives: the model gets the range
+// and an explicit floor, and the response has the token budget to reach it.
 const LENGTH_GUIDE = {
-  short: 'about 120-180 words (or the equivalent in the target script)',
-  medium: 'about 300-450 words (or the equivalent in the target script)',
-  long: 'about 600-800 words (or the equivalent in the target script)',
+  short: '200-350 words (or the equivalent length in the target script). Do NOT stop before 200 words.',
+  medium: '450-700 words (or the equivalent length in the target script). Do NOT stop before 450 words.',
+  long: '1000-1500 words (or the equivalent length in the target script). Do NOT stop before 1000 words - write the FULL text, never a summary or an outline of one.',
 };
 
 const BAND_GUIDE = {
@@ -59,6 +66,52 @@ const BAND_GUIDE = {
   stretch: 'Use mostly everyday vocabulary with a handful of less common words; sentences of varied but moderate length.',
   challenge: 'Use natural, rich vocabulary and full sentence variety; keep it comprehensible to an advanced learner.',
 };
+
+/**
+ * The topic pool for auto-picked ("surprise me") generations: generic,
+ * durable themes - engineering, magic, mystery and neighbours - phrased as
+ * concrete scene seeds so the model has somewhere to start. The server
+ * checks the learner's already-generated topics and picks an UNUSED one;
+ * when the whole pool has been used it resets (and says so).
+ */
+const TOPIC_POOL = [
+  'engineering', 'magic', 'mystery', 'cooking', 'the ocean', 'a long train ride',
+  'a village postman', 'baking bread', 'a night market', 'gardening',
+  'an old radio', 'mountain weather', 'a library card', 'a lost umbrella',
+  'friendship', 'a chess club', 'repairing a bicycle', 'a fishing harbour',
+  'learning to swim', 'a summer storm', 'a small bakery', 'honey and bees',
+  'a rooftop at dusk', 'a broken clock', 'maps', "a potter's studio",
+  "grandmother's recipe", 'a border town', 'a lighthouse keeper',
+  'school in another era', 'a city park in autumn', 'the first snow',
+  'a stray cat', 'a bookshop on a rainy day', 'a bus driver', 'farming',
+  'a concert rehearsal', "an inventor's notebook", 'a river ferry',
+  'translation mistakes', 'an old photograph', 'a mountain guide',
+  'a hospital night shift', 'a train station cafe', 'paper and ink',
+  "a distant cousin's wedding", 'a science fair', 'a blackout',
+  'learning an instrument', 'a snowbound inn', 'birdwatching',
+  'a bar of soap', "a tailor's shop", 'a long walk home', 'new year food',
+  'a ferry crossing', 'an allotment garden', 'a museum guard', 'starlight',
+  'a bicycle courier', 'a quiet dentist', 'a seagull problem', 'a wool shop',
+  'hot springs', 'an apology letter', 'a water mill', 'an eclipse',
+  'a family car trip', 'a rooftop garden', 'an old well', 'a village doctor',
+  'a delivery drone', 'a raincoat', 'a passport found', 'tides',
+  'a wine cellar', 'a school reunion', 'a stuck elevator', 'a bridge at dawn',
+  'an honest tax inspector', 'a cat with two homes', 'a fruit stall', 'a night bus',
+];
+
+/** Pick a topic the learner has NOT generated before (case-insensitive
+ *  against the topics already stored on their AI texts). Returns
+ *  { topic, reset } - reset=true means the pool was exhausted and started over. */
+async function pickFreshTopic(userId) {
+  const rows = await sql()`
+    SELECT DISTINCT topic FROM user_data.texts
+    WHERE user_id = ${userId} AND provenance = 'ai' AND topic IS NOT NULL`;
+  const used = new Set(rows.map((r) => String(r.topic ?? '').toLowerCase().trim()).filter(Boolean));
+  const fresh = TOPIC_POOL.filter((t) => !used.has(t));
+  const pool = fresh.length > 0 ? fresh : TOPIC_POOL;
+  const topic = pool[Math.floor(Math.random() * pool.length)];
+  return { topic, reset: fresh.length === 0 };
+}
 
 const RESPONSE_SCHEMA = {
   type: 'OBJECT',
@@ -76,11 +129,11 @@ function listOfStrings(v, max) {
 
 function buildPrompt({ languageName, languageCode, topic, kind, length, band, knownTerms, unknownTerms, glossLanguage }) {
   return [
-    `You are writing ONE reading text for a language learner.`,
+    `You are writing ONE complete reading text for a language learner.`,
     `Language of the text: ${languageName} (code: ${languageCode}). Every word of the text itself is in that language.`,
     `Topic (from the learner): ${topic}`,
     `Kind: ${KINDS[kind].label}. ${KINDS[kind].guide}`,
-    `Length: ${LENGTH_GUIDE[length]}`,
+    `Length: ${LENGTH_GUIDE[length]} This is a word-count requirement, not a suggestion - write the whole text, complete, with a real ending.`,
     `Difficulty: ${BAND_GUIDE[band]}`,
     knownTerms.length > 0 ? `Prefer using these terms the learner already knows where natural: ${knownTerms.join(', ')}.` : '',
     unknownTerms.length > 0
@@ -95,7 +148,7 @@ function buildPrompt({ languageName, languageCode, topic, kind, length, band, kn
     '4. NO lists, headings, or bullet points inside the text - flowing prose (or pure dialogue lines for a dialogue).',
     '5. NO invented real-world facts presented as true: people, places and events must be ordinary invented ones; a "news" piece is explicitly fiction for reading practice.',
     `6. The title is short and specific, in ${languageName}.`,
-    '7. Return the complete text in "body". No preface, no explanation.',
+    '7. Return the complete text in "body". No preface, no explanation, no stopping early.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -111,6 +164,7 @@ async function callGemini(prompt) {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0.9,
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
         responseMimeType: 'application/json',
         responseSchema: RESPONSE_SCHEMA,
       },
@@ -138,7 +192,7 @@ export default handler({
     const data = await body(req);
 
     const languageCode = requireString(data, 'language_code', { max: 16 });
-    const topic = requireString(data, 'topic', { max: 300 });
+    const requestedTopic = requireString(data, 'topic', { max: 300, optional: true });
     const kind = requireString(data, 'kind', { max: 16 }) ?? 'story';
     const length = requireString(data, 'length', { max: 10 }) ?? 'medium';
     const band = requireString(data, 'target_band', { max: 12 }) ?? 'stretch';
@@ -168,6 +222,18 @@ export default handler({
       throw new HttpError(429, 'rate-limited', `Daily AI generation limit reached (${dailyLimit}). The limit resets tomorrow.`);
     }
 
+    // Topic: given, or auto-picked without repeating anything already
+    // generated for this learner.
+    let topic = (requestedTopic ?? '').trim();
+    let autoTopic = false;
+    let poolReset = false;
+    if (!topic) {
+      const picked = await pickFreshTopic(user.id);
+      topic = picked.topic;
+      autoTopic = true;
+      poolReset = picked.reset;
+    }
+
     const raw = await callGemini(
       buildPrompt({ languageName, languageCode, topic, kind, length, band, knownTerms, unknownTerms, glossLanguage }),
     );
@@ -179,7 +245,7 @@ export default handler({
     }
 
     const generationNote =
-      `Generated by ${GEMINI_MODEL} on Linguarium (topic: "${topic}", ${KINDS[kind].label.toLowerCase()}, ${length}, ${band} band, personalized to this learner's vocabulary). ` +
+      `Generated by ${GEMINI_MODEL} on Linguarium (${autoTopic ? 'auto-picked' : 'learner-given'} topic: "${topic}", ${KINDS[kind].label.toLowerCase()}, ${length}, ${band} band, personalized to this learner's vocabulary). ` +
       `AI-generated content - unverified; the AI is an optional feature, provenance 'ai'.`;
 
     const rows = await sql()`
@@ -189,7 +255,13 @@ export default handler({
         (${user.id}, ${languageCode}, ${title}, ${bodyText}, null, null, 'unspecified', ${generationNote}, 'ai', ${topic.slice(0, 40)})
       RETURNING id, user_id, language_code, title, body, author, source_url, license, adaptation_note, provenance, topic, created_at, updated_at`;
 
-    return json({ text: rows[0], generation: { model: GEMINI_MODEL, kind, length, band, topic } }, 201);
+    return json(
+      {
+        text: rows[0],
+        generation: { model: GEMINI_MODEL, kind, length, band, topic, auto_topic: autoTopic, pool_reset: poolReset },
+      },
+      201,
+    );
   },
 });
 
