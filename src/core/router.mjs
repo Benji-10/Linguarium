@@ -42,6 +42,12 @@ export function navigate(hash) {
   }
 }
 
+/** Re-render the current route from scratch (used when UI state that a view
+ * depends on changes, e.g. the active language switch in the sidebar). */
+export function rerender() {
+  return render();
+}
+
 async function render() {
   const { getState } = await import('./store.mjs');
   const state = getState();

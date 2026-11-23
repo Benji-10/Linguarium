@@ -329,6 +329,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_lexicon_lang_term
   ON knowledge.lexicon (language_code, term);
 CREATE INDEX IF NOT EXISTS idx_lexicon_lang ON knowledge.lexicon (language_code);
 
+-- Online-lookup cache (Wiktionary / free dictionary APIs): the server-side
+-- cache of the word-lookup chain (local lexicon -> online dictionaries ->
+-- user-triggered AI fallback). One row per (language, term) per deployment.
+CREATE TABLE IF NOT EXISTS knowledge.lookup_cache (
+  language_code TEXT NOT NULL,
+  term          TEXT NOT NULL,
+  payload       JSONB NOT NULL,
+  source        TEXT NOT NULL,
+  source_url    TEXT,
+  license       TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (language_code, term)
+);
+
 -- Extended language resources: a curated catalog of open frequency lists,
 -- pronunciation references, learner corpora and dictionaries per language,
 -- each with license metadata. Links point at the source - the data itself

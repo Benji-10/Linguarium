@@ -12,6 +12,7 @@ import {
   cacheCollections,
   getCachedCollections,
   putKV,
+  getKV,
 } from './idb.mjs';
 import { setState, getState } from './store.mjs';
 
@@ -30,6 +31,61 @@ export async function loadLanguages() {
 
 function kvGet(key, fallback) {
   return import('./idb.mjs').then((m) => m.getKV(key, fallback));
+}
+
+// ------------------------------------------------------------------
+// Segmentation dictionary (Japanese / Chinese / other no-space scripts).
+// The lexicon part is fetched once per language per session and cached in
+// IndexedDB; the learner's own vocabulary (state.entries) is merged in at
+// build time, so segmentation improves as they learn.
+// ------------------------------------------------------------------
+
+const lexiconDictCache = new Map(); // language -> Promise<rows>
+
+async function fetchLexiconDictionary(language) {
+  if (lexiconDictCache.has(language)) return lexiconDictCache.get(language);
+  const promise = (async () => {
+    try {
+      const data = await api('/api/lexicon', { params: { language_code: language, mode: 'dictionary' } });
+      const rows = data.dictionary ?? [];
+      putKV(`segdict:${language}`, rows).catch(() => {});
+      return rows;
+    } catch (err) {
+      const cached = await getKV(`segdict:${language}`, []);
+      return cached ?? [];
+    }
+  })();
+  lexiconDictCache.set(language, promise);
+  return promise;
+}
+
+/**
+ * Build the segmentation dictionary for one language:
+ * { dictionary: Set<string>, readings: Map<term, reading> }.
+ * Ruby bases and other extra terms are merged by the caller.
+ */
+export async function segmentDictionaryFor(language, extraTerms = []) {
+  if (!language) return { dictionary: new Set(), readings: new Map() };
+  const [rows, entries] = await Promise.all([fetchLexiconDictionary(language), Promise.resolve(getState().entries)]);
+  const dictionary = new Set();
+  const readings = new Map();
+  for (const row of rows ?? []) {
+    if (row?.term) {
+      dictionary.add(row.term);
+      if (row.reading) readings.set(row.term, row.reading);
+    }
+  }
+  for (const e of entries ?? []) {
+    if (e?.language_code === language && e?.term) {
+      dictionary.add(e.term);
+      if (e?.normalized) dictionary.add(e.normalized);
+      if (e?.reading) readings.set(e.term, e.reading);
+    }
+  }
+  for (const t of extraTerms ?? []) {
+    if (typeof t === 'string' && t) dictionary.add(t);
+  }
+  return { dictionary, readings };
 }
 
 export async function loadProfiles() {

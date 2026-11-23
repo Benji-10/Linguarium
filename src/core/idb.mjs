@@ -9,7 +9,7 @@
  */
 
 const DB_NAME = 'linguarium';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let dbPromise = null;
 
 function openDb() {
@@ -33,6 +33,8 @@ function openDb() {
         s.createIndex('collection', 'collection_id', { unique: false });
       }
       if (!db.objectStoreNames.contains('enrichments')) db.createObjectStore('enrichments', { keyPath: 'key' });
+      // v2: online dictionary lookups cached offline (Wiktionary et al).
+      if (!db.objectStoreNames.contains('lookups')) db.createObjectStore('lookups', { keyPath: 'key' });
       if (!db.objectStoreNames.contains('queue')) {
         db.createObjectStore('queue', { keyPath: 'id', autoIncrement: true });
       }
@@ -251,6 +253,37 @@ export async function getEnrichment(language, term) {
   );
 }
 
+// ---------------------------------------------------------------- lookups
+// Online dictionary results (Wiktionary / free dictionary APIs), cached per
+// (language, term) so a looked-up word is readable offline afterwards.
+
+export async function cacheLookup(language, term, payload) {
+  return safe(async () => {
+    const db = await openDb();
+    const t = db.transaction('lookups', 'readwrite');
+    t.objectStore('lookups').put({
+      key: `${language}::${term}`,
+      language,
+      term,
+      payload,
+      cached_at: Date.now(),
+    });
+  });
+}
+
+export async function getCachedLookup(language, term) {
+  return safe(
+    () =>
+      new Promise(async (resolve) => {
+        const db = await openDb();
+        const req = db.transaction('lookups', 'readonly').objectStore('lookups').get(`${language}::${term}`);
+        req.onsuccess = () => resolve(req.result?.payload ?? null);
+        req.onerror = () => resolve(null);
+      }),
+    null,
+  );
+}
+
 // ---------------------------------------------------------------- queue
 
 export async function enqueue(op) {
@@ -298,7 +331,7 @@ export async function removeFromQueue(ids) {
 export async function clearAll() {
   return safe(async () => {
     const db = await openDb();
-    const t = db.transaction(['kv', 'entries', 'texts', 'collections', 'collectionItems', 'enrichments', 'queue'], 'readwrite');
+    const t = db.transaction(['kv', 'entries', 'texts', 'collections', 'collectionItems', 'enrichments', 'lookups', 'queue'], 'readwrite');
     for (const name of t.objectStoreNames) {
       if (name !== 'kv') t.objectStore(name).clear();
     }

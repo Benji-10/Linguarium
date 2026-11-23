@@ -90,6 +90,28 @@ async function main() {
 
   startRouter();
 
+  // PWA share target: another app shared text with Linguarium (the service
+  // worker converted the POST into ?share=1&text=...). Hand it to Reading's
+  // import center, prefilled.
+  try {
+    const params = new URLSearchParams(location.search);
+    if (params.get('share') === '1') {
+      const payload = {
+        title: params.get('title') ?? '',
+        text: params.get('text') ?? '',
+        url: params.get('url') ?? '',
+      };
+      if (payload.text || payload.url) {
+        sessionStorage.setItem('linguarium.sharePayload', JSON.stringify(payload));
+        history.replaceState(null, '', location.pathname + '#/reading');
+        location.hash = '#/reading';
+        window.dispatchEvent(new HashChangeEvent('hashchange'));
+      }
+    }
+  } catch {
+    /* storage unavailable - just no share flow */
+  }
+
   // Service worker: installable app shell, offline reading/review.
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
     navigator.serviceWorker.register('/sw.js').catch((err) => {

@@ -51,7 +51,9 @@ export function subscribe(fn) {
 
 export function setActiveLanguage(code) {
   localStorage.setItem(LS_KEY, code);
-  setState({ activeLanguage: code });
+  // Language-scoped session caches (texts list) become stale the moment the
+  // active language changes: drop them so the next view render reloads.
+  setState({ activeLanguage: code, textsLoaded: false });
 }
 
 export function restoreActiveLanguage() {

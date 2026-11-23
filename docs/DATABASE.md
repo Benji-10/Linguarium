@@ -131,7 +131,15 @@ bodies may contain semicolons and apostrophes freely.
 - `knowledge.lexicon` — shared community term definitions (one row per language +
   term, `UNIQUE`). Consulted by `GET /api/lexicon` for the Knowledge lookup, always
   rendered separately from the user's own entries, always `community`-badged with
-  license + source.
+  license + source. `mode=dictionary` returns the full term + reading list for a
+  language: the client builds the CJK segmentation dictionary (and ruby readings)
+  from it, cached in IndexedDB.
+- `knowledge.lookup_cache` — the online dictionary chain cache: one row per
+  (language, term) per deployment holding the mapped entries from Wiktionary /
+  dictionaryapi.dev, with the source name, source URL and license. Written by
+  `GET|POST /api/lookup` only on a fresh fetch; the client additionally caches
+  lookups in IndexedDB (`lookups` store, DB v2) so looked-up words are readable
+  offline.
 - `knowledge.resources` — the curated catalog of open per-language resources
   (frequency lists, pronunciation references, corpora, dictionaries) with license
   metadata, seeded through `sql/seed.sql` (Wiktionary/Wikipedia/Tatoeba generated

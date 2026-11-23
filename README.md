@@ -24,9 +24,11 @@ shipped, including the honest edges).
 | **Vocabulary** | Personal entries with provenance, readings, examples and your own notes; one shared knowledge state for reading, review and collections. |
 | **Collections** | Create and import word lists from CSV / JSON / plain text. **Unparsed entries are retained, not discarded**, shown for repair. Export to CSV/JSON any time. |
 | **FSRS review** | FSRS-5 spaced repetition with **three separate ability dimensions** (recognition, recall, production — production is typed, not multiple-choice). |
-| **Reading** | Interactive reader: click any word (per-character for languages without spaces), keep it, self-assess prior knowledge honestly, see per-reader difficulty estimates with a transparent breakdown. The library follows the language you are studying (with an "All languages" toggle). |
+| **Reading** | Interactive reader: click any word (**words, not characters, for Japanese/Chinese** — dictionary segmentation from the shared lexicon + your own vocabulary), keep it, self-assess prior knowledge honestly, see per-reader difficulty estimates with a transparent breakdown. **Furigana/pinyin render as real ruby** above the words (toggleable, never inline), and the library shows **only the language you are studying** — no cross-language mixing. |
+| **Import center** | Six ways to bring texts in: paste, upload `.txt`/`.html`/`.epub` (parsed in your browser), a URL (fetched server-side, previewed, you confirm the metadata), the **open library** (Project Gutenberg via Gutendex, Wikisource, Wikipedia, Wikinews, curated news RSS — all keyless free APIs in your study language, source author/license attached automatically), AI generation, and passages saved straight from other apps via the PWA **share target**. |
 | **Listening** | Read & listen: browser speech synthesis follows the transcript sentence by sentence (honestly labelled as synthesized, with live voice-availability reporting), or your own audio items referenced by https URL with mandatory source and licence metadata — never stored in the database. |
-| **Knowledge** | Vocabulary lookup with everything known about a term: entry, memory state per dimension, verified etymology when sourced, AI analysis clearly labelled separately, your notes. |
+| **Knowledge** | Vocabulary lookup with everything known about a term: entry, memory state per dimension, verified etymology when sourced, AI analysis clearly labelled separately, your notes — plus the **online dictionary chain** (shared lexicon → Wiktionary / dictionaryapi.dev, attributed and cached offline) with AI as the explicit fallback. |
+| **Word lookup** | Shared lexicon first, then **online dictionaries** (Wiktionary REST definitions for every language + dictionaryapi.dev for English — keyless, free, attributed with their licenses), cached server-side and offline in IndexedDB. The AI analysis stays an explicit, labelled, user-triggered action. |
 | **Grammar** | Structures as first-class citizens with a four-layer progression (encountered → recognized → understood → independent use) **and generated cloze/recall exercises** from each structure's example sentences — correct answers advance the stage. Korean and Chinese structure sets are seeded. |
 | **Seeded library** | 32 texts across 14 languages with topic tags and honest provenance (public-domain classics transcribed with sources, original demonstration texts labelled as such) — including **six Korean texts** and three Chinese texts. |
 | **Progress** | Dashboard aggregates: due counts, streaks, knowledge-state distribution (reflecting real performance, never "opened a card"). |
@@ -129,6 +131,11 @@ idempotent (IF NOT EXISTS / ON CONFLICT), it only adds the personalization
 columns, the community tables, the shared lexicon starter entries and the
 resource catalog.
 
+Upgrading a database seeded before this refinement round: re-run the seed the
+same way - it adds the `knowledge.lookup_cache` table (online dictionary cache)
+and the **Japanese / Chinese core lexicon** (~300 + ~150 terms with readings)
+that powers word segmentation, ruby readings and lookup for no-space scripts.
+
 The seed loads ~58 language presets, a shared reading library (public-domain
 classics with full citations + demonstration texts), a starter grammar catalog,
 starter shared-lexicon entries and the open-resources catalog. Everything seeded
@@ -145,6 +152,8 @@ transcribed from, `community` entries say exactly what they are.
    - `DATABASE_URL` — the Neon pooled connection string (**required**)
    - `GEMINI_API_KEY` — optional; without it AI features are disabled but everything else works
    - `GEMINI_DAILY_LIMIT` — optional per-user daily enrichment quota (default 300)
+   - `GEMINI_GENERATE_DAILY_LIMIT` — optional per-user daily AI text generation quota (default 40)
+   - `LOOKUP_DAILY_LIMIT` — optional per-user daily online dictionary lookup quota (default 500)
    - `ADMIN_KEY` — optional; enables `POST /api/admin-seed` (see step 3)
 4. Deploy.
 
@@ -204,6 +213,8 @@ npm run db:init            # create schema + seed (npm run db:seed = seed only)
 # re-run the same command - the seed is idempotent (IF NOT EXISTS / ON CONFLICT),
 # it only adds the new texts, topics, grammar structures, personalization
 # columns, community tables, lexicon starter entries and resource catalog.
+# The refinement round adds the lookup cache table and the Japanese/Chinese
+# core lexicon (readings for segmentation + ruby).
 npm run db:seed
 npm run dev                # netlify dev (via npx): dist + functions + local Identity
 ```

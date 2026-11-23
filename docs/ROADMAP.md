@@ -3,6 +3,44 @@
 All three phases of the platform specification are implemented and tested.
 This file records what shipped and the honest edges that remain.
 
+## Refinements after the phase 3 ship (feedback round)
+
+**Language switch refreshes the page.** Changing the active language in the sidebar
+re-renders the current view immediately (library filters, listening, discover) instead
+of keeping the old language on screen; the nav highlight now follows the URL on every
+hash change (the Reading tab no longer stays lit everywhere), and reading a text
+(`#/read/...`) correctly highlights the Reading tab.
+
+**Reading is strictly per-language.** The "All languages" toggle is gone: your texts
+and the shared starter shelf show only the active language, with a count of hidden
+texts in other languages — no cross-language contamination.
+
+**Ruby annotations.** Inline parenthetical furigana/pinyin (the way public-domain
+editions carry them) are parsed out of the text and rendered as real `<ruby>`/`<rt>`
+markup above the words, with a per-language Furigana/Pinyin toggle. The text stays
+clean and screen readers are no longer fed readings as sentence content. Vocabulary
+the learner already has readings for gets ruby too.
+
+**Dictionary segmentation for Japanese/Chinese.** No-space scripts are tokenized into
+words (greedy longest-match against the shared lexicon core, the learner's own
+vocabulary and the text's ruby bases) instead of single characters. Honestly
+labelled dictionary matching, not morphology; improves as your vocabulary grows.
+
+**The import pipeline (the original content-supply vision).** One import center with
+paste, upload (.txt/.html/.epub via fflate), URL import (SSRF-guarded server fetch,
+preview + user-confirmed metadata), the open library (Project Gutenberg via Gutendex,
+Wikisource, Wikipedia, Wikinews via the MediaWiki API, curated news RSS) and AI
+generation. Gutenberg/Wikipedia imports attach the source's own author, URL and
+license automatically; long books are cut at a sentence boundary with an explicit
+note, never silently. Selection in the reader gains "Save passage" (a new short text
+keeping the parent's provenance) and "Add to deck"; the PWA registers as a share
+target so other apps' share sheets can send passages into the import center.
+
+**Online dictionary lookup.** The word panel and Knowledge consult the shared lexicon
+first, then Wiktionary REST definitions (+ dictionaryapi.dev for English) — keyless,
+free, attributed, cached server-side and in IndexedDB — with the AI analysis as the
+explicit, labelled fallback (see docs/AI.md and docs/CONTENT.md).
+
 ## Phase 2 — deeper practice and content (SHIPPED)
 
 **Grammar explanations and practice.** Structures, provenance and the four-layer
@@ -103,3 +141,17 @@ be disabled in the Netlify UI.
   UI and stores its losses for inspection.
 - Adaptation quality depends on the model; the UI always offers the original
   next to the adapted copy, and the adaptation note says exactly what was done.
+- CJK segmentation is dictionary matching (shared lexicon + your vocabulary +
+  the text's own ruby bases), **not** a morphological analyzer: unknown kanji stay
+  single tokens, unsegmented kana stretches group calmly, and text selection
+  remains the exact term tool. Wikisource/Wikipedia licenses are attached
+  automatically but Wikisource's per-work license is deliberately left
+  "unspecified (check the work page)" for the user to confirm.
+- URL import extracts readable text server-side without a headless browser:
+  JavaScript-rendered pages honestly answer "did not yield readable text" instead
+  of silently saving junk.
+- The ruby base-covering heuristic for readings that span part of a Han run is an
+  approximation (proportional reading length), documented in
+  `src/shared/ruby.mjs`; a misaligned ruby is cosmetic and never changes the text.
+- AI generation follows the same honesty rules: it is fiction labelled `ai`, and
+  "news-style" generations say plainly that they are reading practice, not news.

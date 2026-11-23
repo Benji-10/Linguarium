@@ -71,6 +71,14 @@ self.addEventListener('message', (msgEvent) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
+  // PWA share target: another app POSTs shared text to /index.html; the
+  // worker converts it into a normal GET navigation carrying the payload in
+  // the query string, which the app picks up at boot (Reading -> import).
+  if (event.request.method === 'POST' && url.pathname === '/index.html' && url.searchParams.get('share') === '1') {
+    event.respondWith(handleSharePost(event.request));
+    return;
+  }
+
   // Never touch the API: user data is cached in IndexedDB by the app,
   // with explicit offline-sync rules - not via a stale HTTP cache.
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/.netlify/')) {
@@ -110,3 +118,15 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
+
+/** Parse the multipart share-target POST into a redirect with query params. */
+async function handleSharePost(request) {
+  const form = await request.formData();
+  const params = new URLSearchParams();
+  params.set('share', '1');
+  for (const key of ['title', 'text', 'url']) {
+    const value = form.get(key);
+    if (typeof value === 'string' && value.trim() !== '') params.set(key, value.slice(0, 100000));
+  }
+  return Response.redirect(`/index.html?${params.toString()}`, 303);
+}

@@ -58,6 +58,75 @@ test('character-level tokenization for Japanese-like languages', () => {
   );
 });
 
+// ---------------------------------------------------------------
+// Dictionary segmentation (Japanese / Chinese / other no-space scripts):
+// a term dictionary (learner vocabulary + shared lexicon + ruby bases)
+// turns per-character tokens into greedy longest-match words.
+// ---------------------------------------------------------------
+
+const JA_DICT = new Set([
+  '私', 'は', '猫', 'いる', 'ます', 'の', 'に', '名前', 'まだ', '無い',
+  '食べる', 'を', '人間', '見る', 'これ', 'それ', '何', 'と', 'も',
+]);
+
+test('dictionary segmentation groups Japanese into words, not characters', () => {
+  const toks = tokenize('私は猫です。名前はまだ無い。', JA, JA_DICT);
+  // です is not in the dictionary: the kana stretch groups into one token.
+  assert.deepEqual(
+    toks.map((t) => t.text),
+    ['私', 'は', '猫', 'です', '名前', 'は', 'まだ', '無い'],
+  );
+});
+
+test('dictionary segmentation offsets stay contiguous and correct', () => {
+  const text = '名前はまだ無い。';
+  const toks = tokenize(text, JA, JA_DICT).filter((t) => t.text !== '。');
+  let covered = '';
+  for (const t of toks) {
+    assert.equal(text.slice(t.start, t.end), t.text);
+    covered += t.text;
+  }
+  assert.equal(covered, '名前はまだ無い');
+});
+
+test('unknown kanji stay single tokens; kana stretches group calmly', () => {
+  // 獰悪 are unknown kanji (single tokens each). In あれは何ですか the stretch
+  // あれ ends at the dictionary word は, 何 is a dictionary word, and ですか
+  // (no dictionary term inside it) groups into one calm token.
+  const dict = new Set(['は', '何']);
+  const toks = tokenize('獰悪あれは何ですか。', JA, dict);
+  assert.deepEqual(
+    toks.map((t) => t.text),
+    ['獰', '悪', 'あれ', 'は', '何', 'ですか'],
+  );
+});
+
+test('empty dictionary falls back to per-character tokenization', () => {
+  const toks = tokenize('私はここにいます。', JA, new Set());
+  assert.deepEqual(toks.map((t) => t.text), ['私', 'は', 'こ', 'こ', 'に', 'い', 'ま', 'す']);
+});
+
+test('chinese segmentation with pinyin vocabulary works the same way', () => {
+  const ZH = { charLevel: true, caseFold: false };
+  const dict = new Set(['我', '学', '学习', '汉字', '了', '很多']);
+  const toks = tokenize('我学习汉字了。', ZH, dict).filter((t) => /\p{L}/u.test(t.text));
+  assert.deepEqual(
+    toks.map((t) => t.text),
+    ['我', '学习', '汉字', '了'],
+  );
+});
+
+test('longest match wins over shorter prefixes', () => {
+  const dict = new Set(['食', '食べる']);
+  const toks = tokenize('食べる', JA, dict);
+  assert.deepEqual(toks.map((t) => t.text), ['食べる']);
+});
+
+test('word-level tokenization ignores a dictionary argument', () => {
+  const toks = tokenize('The cat', EN, new Set(['The', 'cat']));
+  assert.deepEqual(toks.map((t) => t.text), ['The', 'cat']);
+});
+
 test('normalization: NFC + case folding when configured', () => {
   assert.equal(normalizeTerm('Maison', EN), 'maison');
   assert.equal(normalizeTerm('  Maison ', EN), 'maison');

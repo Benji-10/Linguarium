@@ -287,6 +287,29 @@ textarea { resize: vertical; }
 .check input { width: auto; margin: 0; }
 .source-details summary { cursor: pointer; color: var(--ink-soft); font-size: 13.5px; margin-bottom: 6px; }
 
+/* ---------------------------------------------------------------- import center */
+
+.import-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.import-tab.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.import-preview textarea { font-size: 13px; }
+.library-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.library-controls select { width: auto; flex: none; }
+.library-controls input { flex: 1; min-width: 160px; }
+.library-item {
+  display: flex; gap: 10px; align-items: center; justify-content: space-between;
+  border: 1px solid var(--line); border-radius: var(--radius-s);
+  padding: 10px 12px;
+}
+.library-item-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.library-item-main a { color: var(--accent); }
+@media (max-width: 640px) {
+  .library-item { flex-direction: column; align-items: stretch; }
+}
+
 .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .toolbar input[type='search'] { flex: 1; min-width: 180px; }
 .toolbar select { width: auto; min-width: 140px; }
@@ -505,6 +528,49 @@ textarea { resize: vertical; }
   position: fixed; left: 50%; transform: translateX(-50%); bottom: 78px;
   z-index: 59;
 }
+
+/* ---- ruby (furigana / pinyin) ---- */
+.reader-body ruby {
+  ruby-position: over;
+  ruby-align: center;
+}
+.reader-body ruby rt {
+  font-family: var(--sans);
+  font-size: 0.42em;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  padding: 0 1px;
+  transform: translateY(-1px);
+  user-select: none;
+}
+.reader-body ruby rt.rt-hidden { display: none; }
+.reader-body ruby.rb-annotated { background: transparent; }
+.reader-body ruby.rb-vocab rt { color: var(--ink-faint); }
+
+/* ---- selection action bar ---- */
+.selection-bar {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 78px;
+  z-index: 59;
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  background: var(--bg-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.16);
+  padding: 6px 8px;
+}
+.deck-pick { display: block; width: 100%; text-align: left; }
+
+/* ---- dictionary lookup results in the word panel ---- */
+.lookup-box { border: 1px dashed var(--line-strong); border-radius: var(--radius-s); padding: 10px 12px; margin-top: 8px; }
+.lookup-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.lookup-row { margin: 6px 0; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.lookup-row:last-child { border-bottom: none; }
+.lookup-def { font-size: 14.5px; }
+.lookup-row .badge { text-decoration: none; margin-top: 4px; display: inline-block; }
+
+/* ---- toggled-off buttons (ruby toggle etc) ---- */
+.btn.toggled-off { opacity: 0.6; }
 
 /* ---------------------------------------------------------------- enrichment */
 

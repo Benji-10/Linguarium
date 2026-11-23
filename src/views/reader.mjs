@@ -20,11 +20,15 @@ import { getState, setState, tokenizerFor, languageName, isRightToLeft } from '.
 import { api } from '../core/api.mjs';
 import { navigate } from '../core/router.mjs';
 import { tokenize, normalizeTerm } from '../shared/tokenizer.mjs';
+import { parseRuby, readingMapFor } from '../shared/ruby.mjs';
+import { segmentDictionaryFor } from '../core/data.mjs';
 import { scoreText } from '../shared/difficulty.mjs';
 import { deriveStatus } from '../shared/status.mjs';
 import { DIFFICULTY_MODES } from '../shared/constants.mjs';
-import { getCachedText, putCachedText, cacheEnrichment, getEnrichment } from '../core/idb.mjs';
+import { getCachedText, putCachedText, cacheEnrichment, getEnrichment, getCachedLookup, cacheLookup } from '../core/idb.mjs';
 import { attachListenBar } from '../shared/listen.mjs';
+
+const RUBY_MODE_KEY = (lang) => `linguarium.ruby.${lang}`;
 
 export async function renderReader(container, params) {
   const { kind, id } = params; // kind: user | shared
@@ -50,6 +54,24 @@ export async function renderReader(container, params) {
   const profile = (state.profiles ?? []).find((p) => p.language_code === language);
   const mode = profile?.difficulty_mode ?? 'stretch';
 
+  // Ruby annotations: inline parenthetical readings (furigana/pinyin) are
+  // parsed out of the text so it stays clean and screen readers are not
+  // fed the readings as sentence content; they render as real <ruby>.
+  const { clean, marks } = parseRuby(text.body ?? '');
+  const rubyBases = marks.map((m) => m.base);
+
+  // Dictionary segmentation: shared lexicon + own vocabulary + this text's
+  // ruby bases. Japanese/Chinese words emerge instead of single characters.
+  const segDict = tokenizer.charLevel ? await segmentDictionaryFor(language, rubyBases) : { dictionary: null, readings: new Map() };
+  const dictionary = segDict.dictionary;
+
+  // Vocabulary readings for ruby on words the text does not annotate.
+  const vocabReadings = readingMapFor(
+    (state.entries ?? []).filter((e) => e.language_code === language),
+    tokenizer,
+  );
+  for (const [term, reading] of segDict.readings ?? []) vocabReadings.set(term, reading);
+
   // Knowledge classification for highlighting.
   const entriesByNorm = new Map();
   for (const e of state.entries.filter((e) => e.language_code === language)) {
@@ -64,14 +86,22 @@ export async function renderReader(container, params) {
     return 'unknown';
   };
 
-  // Difficulty estimate (automated provenance).
-  const tokens = tokenize(text.body ?? '', tokenizer);
+  // Difficulty estimate (automated provenance) - computed on the cleaned
+  // text with the same segmentation the reader displays.
+  const tokens = tokenize(clean, tokenizer, dictionary);
   const knownSet = new Set(
     state.entries
       .filter((e) => e.language_code === language)
       .map((e) => e.normalized),
   );
-  const difficulty = scoreText({ text: text.body ?? '', tokenizer, knownSet });
+  const difficulty = scoreText({ text: clean, tokenizer, knownSet, dictionary });
+
+  // Ruby display toggle (per language, persisted). Annotations are parsed
+  // out of the text either way; the toggle only hides/shows the ruby text.
+  const langHasRuby = marks.length > 0 || language === 'ja' || language === 'zh';
+  let showRuby = localStorage.getItem(RUBY_MODE_KEY(language));
+  if (showRuby === null) showRuby = marks.length > 0 ? '1' : '0';
+  const rubyLabel = language === 'zh' ? 'Pinyin' : 'Furigana';
 
   // Reading progress restore.
   let savedPosition = {};
@@ -104,7 +134,9 @@ export async function renderReader(container, params) {
           ${icon('info')}Estimated: ${DIFFICULTY_MODES[difficulty.band]?.label ?? difficulty.band}
         </span>
         <button class="btn subtle" id="btn-breakdown">${icon('info')}Why this estimate?</button>
-        <button class="btn subtle" id="btn-adapt" title="Adapt this text to your level (phase 3, AI)">${icon('wand')}Adapt</button>
+        ${langHasRuby ? `<button class="btn subtle ${showRuby === '1' ? '' : 'toggled-off'}" id="btn-ruby" title="Show or hide ${rubyLabel.toLowerCase()} readings above the words">${icon('sound')}${rubyLabel}${showRuby === '1' ? ' on' : ' off'}</button>` : ''}
+        <button class="btn subtle" id="btn-share" title="Share this text with other apps">${icon('share')}Share</button>
+        <button class="btn subtle" id="btn-adapt" title="Adapt this text to your level (AI, optional)">${icon('wand')}Adapt</button>
         <a class="btn subtle" href="#/reading">${icon('x')}Close</a>
       </div>
     </section>
@@ -130,11 +162,54 @@ export async function renderReader(container, params) {
       <div id="wp-content"></div>
     </aside>
 
-    <button class="selection-lookup" id="selection-lookup" hidden>${icon('globe')}Look up selection</button>
+    <div class="selection-bar" id="selection-bar" hidden role="toolbar" aria-label="Actions for the selected text">
+      <button class="btn subtle small" data-sel-lookup title="Open the word panel for the selection">${icon('globe')}Look up</button>
+      <button class="btn subtle small" data-sel-passage title="Save the selected sentences as a new short text">${icon('plus')}Save passage</button>
+      <button class="btn subtle small" data-sel-deck title="Add the selection to one of your collections">${icon('library')}Add to deck</button>
+    </div>
   `;
 
   const body = container.querySelector('#reader-body');
-  renderTokens(body, text.body ?? '', tokenizer, classify, rtl);
+  const renderBody = () =>
+    renderTokens(body, clean, tokenizer, classify, rtl, {
+      dictionary,
+      rubyMarks: marks,
+      vocabReadings,
+      showRuby: showRuby === '1',
+    });
+  renderBody();
+
+  // Ruby toggle: hides/shows the <rt> readings. The annotation text stays
+  // parsed out of the body either way - the inline parenthetical form is
+  // never rendered.
+  container.querySelector('#btn-ruby')?.addEventListener('click', (e) => {
+    showRuby = showRuby === '1' ? '0' : '1';
+    localStorage.setItem(RUBY_MODE_KEY(language), showRuby);
+    const btn = e.currentTarget;
+    btn.classList.toggle('toggled-off', showRuby !== '1');
+    btn.innerHTML = `${icon('sound')}${rubyLabel}${showRuby === '1' ? ' on' : ' off'}`;
+    renderBody();
+  });
+
+  // Share the text with other apps via the Web Share API (no-op on desktop
+  // browsers without it - the button reports that honestly).
+  container.querySelector('#btn-share')?.addEventListener('click', async () => {
+    const shareData = { title: text.title, text: clean.slice(0, 4000), url: text.source_url ?? undefined };
+    if (typeof navigator.share === 'function') {
+      try {
+        await navigator.share(shareData);
+      } catch {
+        /* user dismissed the sheet */
+      }
+    } else {
+      try {
+        await navigator.clipboard.writeText(clean.slice(0, 4000));
+        toast('Sharing is not available in this browser - the text was copied to the clipboard instead.', 'info');
+      } catch {
+        toast('Sharing is not available in this browser.', 'warn');
+      }
+    }
+  });
 
   // Automatic adaptation (phase 3): re-level THIS text toward a target band
   // computed against the learner's own knowledge state. The result is stored
@@ -313,6 +388,7 @@ export async function renderReader(container, params) {
     const content = container.querySelector('#wp-content');
     const ai = getState().aiStatus;
     const enrichment = enrichments.get(norm);
+    const lookup = lookups.get(norm);
 
     content.innerHTML = `
       ${entry?.definition ? `<p class="wp-definition">${esc(entry.definition)}</p>` : ''}
@@ -335,11 +411,17 @@ export async function renderReader(container, params) {
       }
 
       ${
+        lookup
+          ? renderLookup(lookup)
+          : `<div class="wp-actions"><button class="btn subtle small" data-lookup title="Shared lexicon first, then Wiktionary / free dictionaries - attributed, cached offline">${icon('globe')}Look up in dictionaries</button></div>`
+      }
+
+      ${
         enrichment
           ? renderEnrichment(enrichment)
           : ai.available
             ? `<div class="wp-actions"><button class="btn subtle small" data-enrich>${icon('flash')}AI analysis</button></div>`
-            : `<p class="muted small ai-off">${icon('info').toString()}AI enrichment is not configured on this deployment. Everything else works.</p>`
+            : `<p class="muted small ai-off">${icon('info').toString()}AI enrichment is not configured on this deployment. Dictionary lookups still work.</p>`
       }
     `;
 
@@ -358,6 +440,82 @@ export async function renderReader(container, params) {
     content.querySelectorAll('[data-enrich]').forEach((b) =>
       b.addEventListener('click', () => doEnrich(termRaw, norm, entry)),
     );
+    content.querySelectorAll('[data-lookup]').forEach((b) =>
+      b.addEventListener('click', () => doLookup(termRaw, norm)),
+    );
+  };
+
+  // Dictionary lookup chain: shared lexicon -> online dictionaries
+  // (Wiktionary et al, attributed and cached) -> AI stays a separate,
+  // explicit action below.
+  const lookups = new Map();
+
+  const doLookup = async (termRaw, norm) => {
+    const content = container.querySelector('#wp-content');
+    const btn = content?.querySelector('[data-lookup]');
+    btn?.setAttribute('disabled', 'disabled');
+    if (btn) btn.innerHTML = `${icon('globe').toString()}Looking up...`;
+    let cached = lookups.get(norm);
+    if (!cached) {
+      cached = await getCachedLookup(language, norm);
+    }
+    if (cached) {
+      lookups.set(norm, cached);
+      renderPanelContent(entriesByNorm.get(norm), termRaw, norm);
+      return;
+    }
+    try {
+      const data = await api('/api/lookup', {
+        method: 'POST',
+        body: { language_code: language, term: termRaw },
+      });
+      lookups.set(norm, data);
+      await cacheLookup(language, norm, data);
+      renderPanelContent(entriesByNorm.get(norm), termRaw, norm);
+    } catch (err) {
+      toast(err.message ?? 'The lookup failed (offline?).', 'neg');
+      if (btn) {
+        btn.removeAttribute('disabled');
+        btn.innerHTML = `${icon('globe').toString()}Look up in dictionaries`;
+      }
+    }
+  };
+
+  const renderLookup = (data) => {
+    const entries = data?.entries ?? [];
+    if (entries.length === 0) {
+      return `
+        <div class="lookup-box">
+          <div class="lookup-head">${icon('globe')}<strong>Dictionaries</strong>
+            <span class="muted small">${esc(data?.online_cached ? 'cached' : 'no entry')}</span></div>
+          <p class="muted small">No dictionary entry for this term yet.${
+            data?.ai_fallback_available
+              ? ' The explicit AI fallback below can still analyze it (labelled unverified).'
+              : ''
+          }</p>
+        </div>`;
+    }
+    const rows = entries
+      .slice(0, 6)
+      .map(
+        (e) => `
+        <div class="lookup-row">
+          <div class="lookup-def">${esc(e.definition)}${e.part_of_speech ? ` <span class="muted small">(${esc(e.part_of_speech)})</span>` : ''}</div>
+          ${e.examples?.length ? `<div class="muted small">${e.examples.slice(0, 2).map((x) => esc(x)).join(' - ')}</div>` : ''}
+          ${
+            e.source === 'lexicon'
+              ? '<span class="badge neutral">shared lexicon</span>'
+              : `<a class="badge neutral" href="${esc(e.source_url ?? '#')}" target="_blank" rel="noopener noreferrer" title="${esc(e.attribution ?? '')}">${esc(e.attribution ?? e.source)}</a>`
+          }
+        </div>`,
+      )
+      .join('');
+    return `
+      <div class="lookup-box">
+        <div class="lookup-head">${icon('globe')}<strong>Dictionaries</strong>
+          <span class="muted small">${data?.online_cached ? 'cached' : ''}</span></div>
+        ${rows}
+      </div>`;
   };
 
   const enrichments = new Map();
@@ -383,7 +541,7 @@ export async function renderReader(container, params) {
         const { entries } = getState();
         setState({ entries: entries.some((e) => e.id === entry.id) ? entries : [entry, ...entries] });
       }
-      renderTokens(body, text.body ?? '', tokenizer, classify, rtl);
+      renderBody();
       renderPanelContent(entriesByNorm.get(norm), termRaw, norm);
     } catch (err) {
       toast(err.message ?? 'Could not add the word (offline?). It will not be lost.', 'warn');
@@ -436,7 +594,7 @@ export async function renderReader(container, params) {
     const { refreshQueueCount } = await import('../core/sync.mjs');
     await refreshQueueCount();
     toast('Self-assessment saved - the scheduler starts from there.', 'pos');
-    renderTokens(body, text.body ?? '', tokenizer, classify, rtl);
+    renderBody();
     renderPanelContent(updated, termRaw, norm);
   };
 
@@ -504,26 +662,112 @@ export async function renderReader(container, params) {
     }
   });
 
-  // Selection lookup (agglutinative / no-space languages) ------------------------
-  const lookupBtn = container.querySelector('#selection-lookup');
-  document.addEventListener('selectionchange', () => {
+  // Selection actions (agglutinative / no-space languages + passages) ----
+  const selectionBar = container.querySelector('#selection-bar');
+  const currentSelection = () => {
     const sel = window.getSelection();
     const str = sel?.toString()?.trim() ?? '';
-    if (!str || str.length > 80 || !container.contains(document.activeElement) && !selContains(body, sel)) {
-      lookupBtn.hidden = true;
+    return str && selContains(body, sel) ? str : null;
+  };
+  document.addEventListener('selectionchange', () => {
+    const str = currentSelection();
+    if (!str || str.length > 400) {
+      selectionBar.hidden = true;
       return;
     }
-    if (selContains(body, sel)) {
-      lookupBtn.hidden = false;
-    } else {
-      lookupBtn.hidden = true;
+    selectionBar.hidden = false;
+  });
+  selectionBar.querySelector('[data-sel-lookup]').addEventListener('click', () => {
+    const str = currentSelection();
+    if (str) openPanel(str);
+    selectionBar.hidden = true;
+  });
+  // Save the selected passage as a new short text with the parent's provenance.
+  selectionBar.querySelector('[data-sel-passage]').addEventListener('click', async () => {
+    const str = currentSelection();
+    selectionBar.hidden = true;
+    if (!str || str.length < 5) {
+      toast('Select a few words first.', 'info');
+      return;
+    }
+    try {
+      const { text: saved } = await api('/api/texts', {
+        method: 'POST',
+        body: {
+          language_code: language,
+          title: `Passage - ${text.title}`.slice(0, 300),
+          body: str,
+          author: text.author ?? null,
+          source_url: text.source_url ?? null,
+          license: text.license ?? 'unspecified',
+          adaptation_note: `Passage saved while reading "${text.title}" (provenance ${text.provenance ?? 'unknown'}).`,
+        },
+      });
+      toast('Passage saved to your library.', 'pos');
+      const { loadTexts } = await import('../core/data.mjs');
+      await loadTexts();
+      navigate(`#/read/user/${saved.id}`);
+    } catch (err) {
+      toast(err.message ?? 'Could not save the passage (offline?).', 'warn');
     }
   });
-  lookupBtn.addEventListener('click', () => {
-    const str = window.getSelection()?.toString()?.trim();
-    if (str) openPanel(str);
-    lookupBtn.hidden = true;
+  // Add the selected word/phrase to one of your collections (decks).
+  selectionBar.querySelector('[data-sel-deck]').addEventListener('click', async () => {
+    const str = currentSelection();
+    selectionBar.hidden = true;
+    if (!str) return;
+    await openAddToDeck(str);
   });
+
+  const openAddToDeck = async (term) => {
+    if (!(getState().collections ?? []).length) {
+      const { loadCollections } = await import('../core/data.mjs');
+      await loadCollections().catch(() => {});
+    }
+    const collections = (getState().collections ?? []).filter((c) => c.language_code === language);
+    const rows = collections
+      .map((c) => `<button class="btn subtle small deck-pick" data-deck="${esc(c.id)}">${icon('library')}${esc(c.name)} <span class="muted small">${(c.item_count ?? '')}</span></button>`)
+      .join('');
+    const m = modal({
+      title: 'Add to a collection',
+      bodyHtml: `
+        <p>Add <strong class="mono">${esc(term)}</strong> to:</p>
+        <div class="stack">${rows || '<p class="muted small">No collections for this language yet.</p>'}</div>
+        <label>New collection <input id="deck-new-name" maxlength="200" placeholder="e.g. From ${esc(languageName(getState().languages, language))} reading"></label>`,
+      actionsHtml: `<button class="btn subtle" data-close>Cancel</button>`,
+    });
+    m.el.querySelector('[data-close]').addEventListener('click', m.close);
+    m.el.querySelectorAll('[data-deck]').forEach((btn) =>
+      btn.addEventListener('click', () => addToDeck(m, term, btn.dataset.deck, null)),
+    );
+    m.el.querySelector('#deck-new-name')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') addToDeck(m, term, null, e.target.value.trim());
+    });
+  };
+
+  const addToDeck = async (m, term, collectionId, newName) => {
+    try {
+      if (!collectionId) {
+        if (!newName) {
+          toast('Name the new collection first.', 'warn');
+          return;
+        }
+        const created = await api('/api/collections', {
+          method: 'POST',
+          body: { language_code: language, name: newName, description: 'Kept while reading.' },
+        });
+        collectionId = created.collection.id;
+      }
+      await api('/api/collection-items', {
+        method: 'POST',
+        body: { collection_id: collectionId, items: [{ raw: term, parsed: true, term }] },
+      });
+      m.close();
+      toast('Added to the collection - open Collections to study it.', 'pos');
+    } catch (err) {
+      toast(err.message ?? 'Could not add it (offline?).', 'warn');
+    }
+  };
 
   function selContains(el, sel) {
     if (!sel || sel.rangeCount === 0) return false;
@@ -566,28 +810,81 @@ export async function renderReader(container, params) {
   };
 }
 
-function renderTokens(body, text, tokenizer, classify, rtl) {
+function renderTokens(body, text, tokenizer, classify, rtl, { dictionary = null, rubyMarks = [], vocabReadings = null, showRuby = false } = {}) {
   const frag = document.createDocumentFragment();
+  // Marks sorted by offset; lookup of the mark covering a token position.
+  const marksByStart = [...rubyMarks].sort((a, b) => a.baseStart - b.baseStart);
+  const markAt = (pos) => marksByStart.find((m) => pos >= m.baseStart && pos < m.baseEnd) ?? null;
+
   // Sentences are wrapped so listening mode can highlight and scroll to one.
   for (const b of sentenceBounds(text)) {
     const sent = document.createElement('span');
     sent.className = 'sent';
     let last = b.start;
-    for (const tok of tokenize(text.slice(b.start, b.end), tokenizer)) {
+    const tokens = tokenize(text.slice(b.start, b.end), tokenizer, dictionary);
+    let i = 0;
+    while (i < tokens.length) {
+      const tok = tokens[i];
       const absStart = b.start + tok.start;
       const absEnd = b.start + tok.end;
       if (absStart > last) sent.appendChild(document.createTextNode(text.slice(last, absStart)));
-      const span = document.createElement('span');
-      span.className = `tok ${classify(normalizeTerm(tok.text, tokenizer))}`;
-      span.dataset.raw = tok.text;
-      span.textContent = tok.text;
-      sent.appendChild(span);
+
+      const mark = markAt(absStart);
+      if (mark && absEnd <= mark.baseEnd) {
+        // Ruby annotation from the text itself: consecutive tokens inside the
+        // base range share one <ruby> with the parsed reading above them.
+        const ruby = document.createElement('ruby');
+        ruby.className = 'rb rb-annotated';
+        let j = i;
+        let end = absEnd;
+        while (j < tokens.length) {
+          const t = tokens[j];
+          const s = b.start + t.start;
+          const e = b.start + t.end;
+          if (s >= mark.baseEnd) break;
+          ruby.appendChild(tokenSpan(t, tokenizer, classify, text));
+          end = Math.max(end, Math.min(e, mark.baseEnd));
+          j += 1;
+        }
+        const rt = document.createElement('rt');
+        rt.textContent = mark.reading;
+        if (!showRuby) rt.className = 'rt-hidden';
+        ruby.appendChild(rt);
+        sent.appendChild(ruby);
+        last = end;
+        i = j;
+        continue;
+      }
+
+      // Vocabulary ruby: a reading the learner's data already carries.
+      const norm = normalizeTerm(tok.text, tokenizer);
+      const reading = showRuby && vocabReadings ? vocabReadings.get(norm) ?? vocabReadings.get(tok.text) : null;
+      if (reading) {
+        const ruby = document.createElement('ruby');
+        ruby.className = 'rb rb-vocab';
+        ruby.appendChild(tokenSpan(tok, tokenizer, classify, text));
+        const rt = document.createElement('rt');
+        rt.textContent = reading;
+        ruby.appendChild(rt);
+        sent.appendChild(ruby);
+      } else {
+        sent.appendChild(tokenSpan(tok, tokenizer, classify, text));
+      }
       last = absEnd;
+      i += 1;
     }
     if (last < b.end) sent.appendChild(document.createTextNode(text.slice(last, b.end)));
     frag.appendChild(sent);
   }
   body.replaceChildren(frag);
+}
+
+function tokenSpan(tok, tokenizer, classify) {
+  const span = document.createElement('span');
+  span.className = `tok ${classify(normalizeTerm(tok.text, tokenizer))}`;
+  span.dataset.raw = tok.text;
+  span.textContent = tok.text;
+  return span;
 }
 
 /** Contiguous sentence ranges: end at . ! ? … 。！？ ؟ or a newline. */

@@ -32,5 +32,12 @@
 
 # Environment variables that MUST be configured (in the Netlify UI, never committed):
 #   DATABASE_URL    - Neon PostgreSQL connection string (pooled endpoint recommended)
-#   GEMINI_API_KEY  - optional. Without it every core feature still works; AI enrichment is disabled.
-#   GEMINI_DAILY_LIMIT - optional per-user daily enrichment quota (default 300).
+#   GEMINI_API_KEY  - optional. Without it every core feature still works; AI enrichment,
+#                     text adaptation and AI generation are disabled.
+#   GEMINI_DAILY_LIMIT         - optional per-user daily enrichment quota (default 300).
+#   GEMINI_GENERATE_DAILY_LIMIT - optional per-user daily AI text generation quota (default 40).
+#   LOOKUP_DAILY_LIMIT         - optional per-user daily online dictionary lookup quota
+#                                (Wiktionary / dictionaryapi.dev; default 500).
+# Dictionary lookups (Wiktionary REST + dictionaryapi.dev for English) and the
+# import sources (Gutendex, MediaWiki APIs, curated news RSS) are keyless and
+# free; no extra environment variables are needed for them.

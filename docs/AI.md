@@ -67,3 +67,36 @@ difficulty band computed against the user's own knowledge state.
   split the text first — no silent truncation.
 - Without `GEMINI_API_KEY`: 503 `ai-not-configured`, and reading works exactly as
   before; the button explains itself instead of erroring.
+
+## Text generation (`POST /api/generate-text`, phase 3 refinement)
+
+Same contract, one more capability: writing a **new** reading text for a learner who
+wants material a language's open sources do not cover (or wants personalized
+material). The platform's content rules apply in full:
+
+- The model sees: the topic, the kind (story / news-style report / essay / dialogue /
+  letter), the length band, the target difficulty band, the language name, and two
+  bounded term lists (this learner's known terms and in-learning terms) — nothing
+  else from their data.
+- The prompt **bans the conventional AI register explicitly**: no "tapestry", "delve",
+  "in the realm of"; no rule-of-three constructions; no summarizing or moralizing
+  closing paragraph; varied sentence lengths; concrete detail; no lists inside prose;
+  invented people/events only, never real-world facts presented as true (a
+  "news-style" text is explicitly fiction for reading practice).
+- The result is stored as a user text with **provenance `ai`** and a generation note
+  naming the model, the topic, the kind and the band. It is never presented as real
+  content.
+- No cache (generations are personal); daily quota (action `generate`,
+  `GEMINI_GENERATE_DAILY_LIMIT`, default 40); 60 s timeout; structured output
+  (`title` + `body`) enforced with `responseSchema`.
+- Without `GEMINI_API_KEY`: 503 `ai-not-configured` with a pointer to the other
+  import paths; the Generate tab is simply not shown in the import center.
+
+## Dictionary lookup is NOT AI (`/api/lookup`)
+
+Word lookups are deliberately **not** model calls: the chain is the shared lexicon →
+the server-side cache → Wiktionary REST definitions (+ dictionaryapi.dev for
+English), all keyless, free and attributed. The AI analysis remains a separate,
+explicit button (labelled unverified) for when the dictionaries have nothing — so
+quotas are predictable and dictionary content keeps its own license (CC BY-SA).
+Online lookups have their own daily quota (`LOOKUP_DAILY_LIMIT`, default 500).

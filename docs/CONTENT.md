@@ -76,6 +76,65 @@ the seed data's, enforced by validation and moderation:
 4. **Invented etymology is a rejection reason** — same non-negotiable rule as above.
 5. Rate-limited submissions (20/day) per user.
 
+## The import pipeline (open sources)
+
+The Reading page's "Import a text" center covers every import path of the platform
+vision, all keyless and free, all in the **active language only** (one language at a
+time — cross-language shelves are hidden, not shown mixed):
+
+| Path | What happens | Provenance kept |
+| --- | --- | --- |
+| Paste | text + mandatory source section (author, URL, license, adaptation note) | user-imported, user asserts licensing |
+| Upload `.txt` / `.html` / `.epub` | parsed in the browser (fflate for EPUB; ruby markup in HTML is preserved as annotations for the reader) | user-imported, user asserts licensing |
+| URL | fetched server-side (SSRF-guarded, size-capped, redirect-capped), extracted to text, **previewed and confirmed by the user** before saving | user-imported, user asserts licensing |
+| Project Gutenberg | Gutendex search → book text from the archive, cap 200k chars cut at a sentence boundary with a note | author + book URL + public-domain license attached automatically |
+| Wikisource / Wikipedia / Wikinews | MediaWiki search → page text via `prop=extracts` (or parsed HTML fallback) | source URL, author ("Wikipedia contributors" etc.), license (CC BY-SA / CC BY 2.5 / per-work for Wikisource) attached automatically |
+| News feeds | curated stable RSS (BBC, DW, France 24) → items open through the URL path | article page is the licensing authority; user confirms metadata |
+| AI generation | Gemini `gemini-3.1-flash-lite`, optional, personal (known/unknown term lists in the prompt), quota'd | provenance `ai` + generation note naming model, topic, band |
+
+Long Gutenberg books are never silently truncated: the cut is at a sentence boundary at
+the 200,000-character cap and the text's note says exactly that.
+
+The catalog and URL fetchers live in `netlify/functions/lib/sources.mjs` (pure mappers
+unit-tested offline) and every server-side fetch passes the SSRF guard (no private
+hosts, no odd ports, no credentials, redirect cap, size cap, timeout).
+
+## Word lookup: the dictionary chain
+
+Looking a word up (reader word panel, Knowledge) follows the honest source order:
+
+1. **shared lexicon** (local database, instant, offline, community provenance);
+2. **online dictionaries** — Wiktionary REST definitions for every language, plus
+   dictionaryapi.dev for English (keyless, free, cached server-side in
+   `knowledge.lookup_cache` and client-side in IndexedDB);
+3. **AI analysis** (Gemini) — the explicit, user-triggered fallback, never called
+   silently, always labelled unverified.
+
+Every entry carries its source and license: Wiktionary content is CC BY-SA 4.0 and is
+attributed by linking the entry page.
+
+## Ruby (furigana / pinyin)
+
+Inline parenthetical readings (`吾輩（わがはい）`, `汉字(hànzì)`) — common in
+public-domain editions — are **parsed out of the text** (so the text length and
+screen readers are not distorted by readings-as-sentence-content) and rendered as real
+`<ruby>`/`<rt>` markup above the words. A per-language Furigana/Pinyin toggle hides or
+shows the readings; the parsed annotation form is never rendered inline. Words the
+learner's vocabulary already carries readings for get vocabulary ruby too. The
+base-covering heuristic for readings that span only part of a Han run is an
+approximation (proportional reading length) and is documented as such in
+`src/shared/ruby.mjs`.
+
+## Segmentation for no-space scripts
+
+Japanese and Chinese are segmented into **words** by dictionary matching
+(`src/shared/tokenizer.mjs`): a greedy longest-match over the shared lexicon (the
+seeded core lists), the learner's own vocabulary, and this text's ruby bases. This is
+honestly labelled dictionary matching — **not a morphological analyzer**: unknown
+kanji stay single tokens and unsegmented kana stretches group calmly; exact
+multi-word terms are what text selection lookup is for. Segmentation improves
+automatically as your vocabulary grows.
+
 ## Extended language resources (phase 3)
 
 `knowledge.resources` is a catalog of *links* — open frequency lists, pronunciation

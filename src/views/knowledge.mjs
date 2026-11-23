@@ -72,6 +72,7 @@ export async function renderKnowledge(container, params) {
               .join('')}
           </select>
           <button class="btn subtle" id="k-lexicon" title="Look up the exact search term in the community-maintained shared lexicon">${icon('users')}Shared lexicon</button>
+          <button class="btn subtle" id="k-online" title="Shared lexicon first, then Wiktionary / free online dictionaries - attributed, cached offline">${icon('globe')}Dictionaries</button>
         </div>
         <div id="k-lexicon-results"></div>
         ${
@@ -122,6 +123,32 @@ export async function renderKnowledge(container, params) {
       try {
         const data = await api('/api/lexicon', { params: { language_code: language, term: query.trim() } });
         host.innerHTML = renderLexiconResults(data.entries ?? [], language);
+      } catch (err) {
+        host.innerHTML = `<p class="muted small">Lookup failed: ${esc(err.message ?? 'offline')}.</p>`;
+      }
+      btn.disabled = false;
+    });
+
+    // The online dictionary chain (shared lexicon -> Wiktionary / free
+    // dictionaries, server-side cached, attributed). The AI analysis stays a
+    // separate, explicit action inside an entry's detail.
+    container.querySelector('#k-online')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const host = container.querySelector('#k-lexicon-results');
+      if (!host || !language || !query.trim()) {
+        if (host) host.innerHTML = '';
+        if (!query.trim()) toast('Type a term in the search box first, then look it up.', 'info');
+        if (!language) toast('Pick a single language first (dictionaries are per language).', 'info');
+        return;
+      }
+      btn.disabled = true;
+      host.innerHTML = spinner('Consulting dictionaries');
+      try {
+        const data = await api('/api/lookup', {
+          method: 'POST',
+          body: { language_code: language, term: query.trim() },
+        });
+        host.innerHTML = renderOnlineResults(data, language);
       } catch (err) {
         host.innerHTML = `<p class="muted small">Lookup failed: ${esc(err.message ?? 'offline')}.</p>`;
       }
@@ -414,5 +441,43 @@ function renderLexiconResults(rows, language) {
           .join('')}
       </div>
       <p class="muted small">Gloss language: ${esc(rows[0]?.gloss_language ?? 'en')}. These are community definitions, not your data - your own entry (if any) is listed above and stays separate.</p>
+    </div>`;
+}
+
+/** Online dictionary chain results: shared lexicon + Wiktionary / free APIs. */
+function renderOnlineResults(data, language) {
+  const entries = data?.entries ?? [];
+  const head = `
+    <div class="lexicon-lookup">
+      <div class="panel-head">
+        <h3>${icon('globe')}Dictionaries <span class="muted small">${data?.online_cached ? 'cached' : ''}</span></h3>
+      </div>`;
+  if (entries.length === 0) {
+    return `${head}
+      <p class="muted small">No dictionary entry for this term in either the shared lexicon or the online dictionaries (Wiktionary and friends).${
+        data?.ai_fallback_available ? ' The AI analysis inside an entry detail is the explicit fallback - labelled unverified.' : ' AI fallback is not configured on this deployment.'
+      }</p>
+    </div>`;
+  }
+  const rows = entries
+    .slice(0, 10)
+    .map(
+      (e) => `
+      <div class="lexicon-row">
+        <div class="lexicon-def">${esc(e.definition)}${e.part_of_speech ? ` <span class="muted small">(${esc(e.part_of_speech)})</span>` : ''}</div>
+        ${e.examples?.length ? `<div class="muted small">${e.examples.slice(0, 2).map((x) => esc(x)).join(' - ')}</div>` : ''}
+        <div class="lexicon-side">
+          ${
+            e.source === 'lexicon'
+              ? '<span class="badge neutral">shared lexicon</span>'
+              : `<a class="badge neutral" href="${esc(e.source_url ?? '#')}" target="_blank" rel="noopener noreferrer" title="${esc(e.attribution ?? '')}">${esc(e.attribution ?? e.source)} - ${esc(e.license ?? '')}</a>`
+          }
+        </div>
+      </div>`,
+    )
+    .join('');
+  return `${head}
+      <div class="lexicon-rows">${rows}</div>
+      <p class="muted small">Sources consulted: ${(data?.sources_consulted ?? []).map((s) => `${esc(s.name)} (${esc(s.result)})`).join(', ')}. Online dictionary content keeps its own license and attribution (e.g. Wiktionary is CC BY-SA).</p>
     </div>`;
 }

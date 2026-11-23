@@ -27,14 +27,17 @@ const clamp01 = (v) => Math.min(1, Math.max(0, v));
  * @param {object} params
  * @param {string} params.text
  * @param {object} params.tokenizer language tokenizer config
+ * @param {Set<string>} [params.dictionary] segmentation dictionary for no-space
+ *   scripts (same dictionary the reader displays) so the estimate matches the
+ *   tokens the learner actually sees
  * @param {Set<string>} params.knownSet normalized terms the user knows
  * @param {Map<string, number>} [params.frequencyRanks] optional term -> rank
  *   (lower rank = more common). Missing ranks count as mid-frequency.
  * @param {number} [params.subjectFamiliarity] optional 0..1
  * @returns {object} difficulty report
  */
-export function scoreText({ text, tokenizer, knownSet, frequencyRanks = null, subjectFamiliarity = null }) {
-  const tokens = tokenize(text, tokenizer);
+export function scoreText({ text, tokenizer, knownSet, dictionary = null, frequencyRanks = null, subjectFamiliarity = null }) {
+  const tokens = tokenize(text, tokenizer, dictionary);
   const sentences = splitSentences(text);
 
   let known = 0;
@@ -60,7 +63,7 @@ export function scoreText({ text, tokenizer, knownSet, frequencyRanks = null, su
   const familiarity = clamp01(known / total);
 
   const meanSentenceLength =
-    sentences.length > 0 ? sentences.reduce((acc, s) => acc + tokenize(s, tokenizer).length, 0) / sentences.length : 0;
+    sentences.length > 0 ? sentences.reduce((acc, s) => acc + tokenize(s, tokenizer, dictionary).length, 0) / sentences.length : 0;
   const syntax = clamp01(meanSentenceLength / 25); // 25+ tokens/sentence -> max score
 
   const lengthScore = clamp01(tokens.length / 8000);

@@ -3,9 +3,9 @@
  * active-language selector, online/offline + sync indicator.
  */
 
-import { icon, esc, brandLogo } from './components.mjs';
-import { getState, setState, subscribe, setActiveLanguage } from '../core/store.mjs';
-import { navigate } from '../core/router.mjs';
+import { icon, esc, brandLogo, toast } from './components.mjs';
+import { getState, setState, subscribe, setActiveLanguage, languageName } from '../core/store.mjs';
+import { navigate, rerender } from '../core/router.mjs';
 import { flushQueue, refreshQueueCount } from '../core/sync.mjs';
 import { currentMode, effectiveMode, toggleMode } from '../core/theme.mjs';
 
@@ -15,7 +15,7 @@ const NAV_GROUPS = [
     items: [
       { hash: '#/', icon: 'dashboard', label: 'Dashboard' },
       { hash: '#/discover', icon: 'compass', label: 'Discover' },
-      { hash: '#/reading', icon: 'book', label: 'Reading' },
+      { hash: '#/reading', icon: 'book', label: 'Reading', aliases: ['#/read/'] },
       { hash: '#/listening', icon: 'headphones', label: 'Listening' },
     ],
   },
@@ -81,10 +81,14 @@ export function renderLayout(root) {
     if (a) navigate(a.dataset.nav);
   });
 
-  // Language selector
+  // Language selector: switching the active language re-renders the current
+  // view so the page reflects the new language immediately (library filters,
+  // listening list, discover, dashboards - they are all language-scoped).
   const select = root.querySelector('#active-language');
   select.addEventListener('change', () => {
     setActiveLanguage(select.value);
+    rerender();
+    toast(`Switched to ${languageName(getState().languages, select.value)}.`, 'info');
   });
 
   // Sync button
@@ -111,6 +115,11 @@ export function renderLayout(root) {
   const unsub = subscribe(() => updateChrome(root));
   updateChrome(root);
 
+  // The nav highlight must follow the URL, not just store updates: a view
+  // that never touches the store (e.g. the reader) would otherwise leave the
+  // previously highlighted tab lit forever.
+  window.addEventListener('hashchange', () => updateChrome(root));
+
   window.addEventListener('online', () => {
     setState({ online: true });
     flushQueue({ silent: false }).then(() => refreshQueueCount());
@@ -122,10 +131,14 @@ export function renderLayout(root) {
 
 function navHtml() {
   const current = location.hash || '#/';
+  const matches = (item) =>
+    item.hash === current ||
+    (item.hash !== '#/' && current.startsWith(item.hash + '/')) ||
+    (item.aliases ?? []).some((a) => current.startsWith(a));
   return NAV_GROUPS.map((group) => {
     const items = group.items
       .map((item) => {
-        const active = item.hash === current || (item.hash !== '#/' && current.startsWith(item.hash));
+        const active = matches(item);
         return (
           `<a href="${item.hash}" data-nav="${item.hash}" class="nav-item ${active ? 'active' : ''} ${item.soon ? 'soon' : ''}">` +
           `${icon(item.icon).toString()}<span>${esc(item.label)}</span>${item.soon ? '<em class="phase-tag">phase 2</em>' : ''}` +
