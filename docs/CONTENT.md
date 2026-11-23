@@ -87,13 +87,42 @@ time — cross-language shelves are hidden, not shown mixed):
 | Paste | text + mandatory source section (author, URL, license, adaptation note) | user-imported, user asserts licensing |
 | Upload `.txt` / `.html` / `.epub` | parsed in the browser (fflate for EPUB; ruby markup in HTML is preserved as annotations for the reader) | user-imported, user asserts licensing |
 | URL | fetched server-side (SSRF-guarded, size-capped, redirect-capped), extracted to text, **previewed and confirmed by the user** before saving | user-imported, user asserts licensing |
-| Project Gutenberg | Gutendex search → book text from the archive, cap 200k chars cut at a sentence boundary with a note | author + book URL + public-domain license attached automatically |
-| Wikisource / Wikipedia / Wikinews | MediaWiki search → page text via `prop=extracts` (or parsed HTML fallback) | source URL, author ("Wikipedia contributors" etc.), license (CC BY-SA / CC BY 2.5 / per-work for Wikisource) attached automatically |
+| Aozora Bunko (Japanese) | curated shelf of 38 famous public-domain works, local search (instant, no upstream API to hang); the text is fetched from the official HTML edition (furigana preserved), then the aozorahack.org text mirror, then the official .zip — all decoded from Shift-JIS | author + Aozora card URL + per-work license attached automatically |
+| Project Gutenberg | Gutendex browse/search → book text from the pglaf.org mirror first (gutenberg.org 503-throttles datacenter IPs), cap 200k chars cut at a sentence boundary with a note | author + book URL + public-domain license attached automatically |
+| Wikisource / Wikipedia / Wikibooks / Wikinews | MediaWiki search → page text via `prop=extracts` (or parsed HTML fallback) | source URL, author ("Wikipedia contributors" etc.), license (CC BY-SA / CC BY 2.5 / per-work for Wikisource) attached automatically |
 | News feeds | curated stable RSS (BBC, DW, France 24) → items open through the URL path | article page is the licensing authority; user confirms metadata |
 | AI generation | Gemini `gemini-3.1-flash-lite`, optional, personal (known/unknown term lists in the prompt), quota'd | provenance `ai` + generation note naming model, topic, band |
 
+**Sources differ per language, and the import screen says so.** The provider
+registry in `lib/sources.mjs` records which source actually serves which
+language (probed live 2026-11: Gutendex per-language counts, the wikisource.org
+portal edition list, the Wikimedia project lists):
+
+- Japanese leads with **Aozora Bunko** — Gutenberg's ja shelf is 22 books and
+  Japanese has a canonical free library of its own; the imported works carry
+  their furigana as ruby annotations.
+- Korean has no large keyless corpus (National Library of Korea and the
+  Modu corpus need keys/applications): the wiki family — Wikisource, Wikipedia,
+  Wikibooks, Wikinews — is what honestly exists for it.
+- Chinese gets Wikisource zh (a large classical-text library) plus the wiki
+  family; Gutenberg's 444 zh books are offered too.
+- Gutenberg is only offered where its catalogue actually has a shelf
+  (en, fr, es, pt, it, ca, de, nl, sv, da, nb→no, fi, is, pl, cs, hu, ro,
+  bg, ru, el, la, eo, cy, ga, af, tl, he, zh, ja): Gutendex *hangs* for
+  minutes on languages with zero books instead of answering empty, so the
+  server answers honestly ("no shelf for this language, try …") rather than
+  stalling.
+- Norwegian (bokmål, `nb`) wiki editions live on the `no.` subdomain — the
+  MW URL builders remap it; Wikipedia itself really is `nb.wikipedia.org`.
+- Wikinews and Wikibooks editions are offered only for the languages that
+  have them; `tok` (Toki Pona) has a Wikisource but no Wikipedia (closed
+  2005).
+
 Long Gutenberg books are never silently truncated: the cut is at a sentence boundary at
-the 200,000-character cap and the text's note says exactly that.
+the 200,000-character cap and the text's note says exactly that. Gutendex answers are
+memo-cached for 10 minutes per function instance (it rate-limits bursts); gutenberg.org
+is only reached through the pglaf.org mirror because gutenberg.org 503-refuses
+datacenter traffic.
 
 The catalog and URL fetchers live in `netlify/functions/lib/sources.mjs` (pure mappers
 unit-tested offline) and every server-side fetch passes the SSRF guard (no private

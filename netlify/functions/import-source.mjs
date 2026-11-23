@@ -11,12 +11,15 @@
  *     the text is saved through POST /api/texts. Nothing is stored here.
  *
  *   { mode: 'provider', provider, ref, language_code }
- *     Full import from a catalog item (gutenberg | wikisource | wikipedia |
- *     wikinews): fetches the text, attaches the source's own metadata
+ *     Full import from a catalog item (aozora | gutenberg | wikisource |
+ *     wikipedia | wikibooks | wikinews): fetches the text, attaches the
+ *     source's own metadata
  *     (author, source URL, license) and stores it as a user text with
  *     provenance 'user-imported'. Gutenberg books longer than the import cap
  *     are cut at a sentence boundary and say so in the adaptation note -
- *     nothing is silently truncated.
+ *     nothing is silently truncated. Aozora works arrive via the official
+ *     HTML edition (furigana kept as ruby annotations) with the aozorahack.org
+ *     mirror and the official .zip as fallbacks, all decoded from Shift-JIS.
  */
 
 import { handler, json, body, requireString, HttpError } from './lib/http.mjs';
@@ -25,9 +28,13 @@ import { sql } from './lib/db.mjs';
 import {
   fetchText,
   fetchTextCapped,
+  fetchJson,
   fetchJsonRetry,
   htmlToText,
   htmlTitle,
+  aozoraByRef,
+  aozoraUrls,
+  fetchAozoraText,
   GUTENBERG_TEXT_URLS,
   GUTENDEX_BOOK_URL,
   MW_EXTRACT_URL,
@@ -42,9 +49,13 @@ const MAX_BODY_CHARS = 200000;
 // that fits the TOTAL function budget (~28 s worst case).
 const GUTENBERG_CANDIDATE_TIMEOUTS = [24000, 8000, 8000];
 const GUTENBERG_BYTE_CAP = 700 * 1024; // > the 200k-char import cut for every script
-const TEXT_PROVIDERS = new Set(['gutenberg', 'wikisource', 'wikipedia', 'wikinews']);
+const TEXT_PROVIDERS = new Set(['gutenberg', 'wikisource', 'wikipedia', 'wikibooks', 'wikinews', 'aozora']);
 
 const PROVIDER_META = {
+  aozora: {
+    license: 'public-domain (per Aozora Bunko handling rules; the work page is authoritative)',
+    note: 'Text from Aozora Bunko (青空文庫), the Japanese free library. Furigana readings from the work itself are preserved as ruby annotations.',
+  },
   gutenberg: {
     license: 'public-domain',
     authorOf: (meta) => meta?.author ?? null,
@@ -62,6 +73,12 @@ const PROVIDER_META = {
     authorOf: () => 'Wikipedia contributors',
     pageUrl: (language, ref) => `https://${language}.wikipedia.org/wiki/${encodeURIComponent(ref)}`,
     note: 'Wikipedia article text (CC BY-SA 4.0, attribution: Wikipedia contributors).',
+  },
+  wikibooks: {
+    license: 'cc-by-sa-4.0',
+    authorOf: () => 'Wikibooks contributors',
+    pageUrl: (language, ref) => `https://${language}.wikibooks.org/wiki/${encodeURIComponent(ref)}`,
+    note: 'Textbook page from Wikibooks (CC BY-SA 4.0, attribution: Wikibooks contributors).',
   },
   wikinews: {
     license: 'cc-by-2.5',
@@ -154,6 +171,36 @@ async function fetchWikiPage(project, language, title) {
   throw new HttpError(502, 'source-unreachable', 'That page exists but its text could not be extracted from the wiki API.');
 }
 
+/** Aozora Bunko import: resolve the curated work by ref, fetch via the three
+ *  routes (official HTML with furigana -> plain-text mirror -> official zip),
+ *  decode Shift-JIS. Returns { body, author, sourceUrl, note }. */
+async function fetchAozoraWork(ref, languageCode) {
+  if (languageCode !== 'ja') {
+    throw new HttpError(400, 'not-for-language', 'Aozora Bunko serves Japanese only.');
+  }
+  const work = aozoraByRef(ref);
+  if (!work) {
+    throw new HttpError(400, 'invalid-ref', 'Unknown Aozora work (the curated shelf in the catalog is the source of truth).');
+  }
+  const urls = aozoraUrls(work);
+  let fetched;
+  try {
+    fetched = await fetchAozoraText(work);
+  } catch (err) {
+    throw new HttpError(
+      502,
+      'source-unreachable',
+      `The work could not be fetched from Aozora Bunko or its mirror. ${err?.message ?? ''}`,
+    );
+  }
+  return {
+    body: fetched.text,
+    author: work.au,
+    sourceUrl: urls.card,
+    note: `${PROVIDER_META.aozora.note} Fetched from the ${fetched.route === 'html' ? 'official HTML edition' : fetched.route === 'txt' ? 'aozorahack.org text mirror' : 'official text archive'}.`,
+  };
+}
+
 export default handler({
   POST: async (req) => {
     const user = await requireUser();
@@ -220,8 +267,16 @@ export default handler({
         sourceUrl = meta2.pageUrl(ref);
         note = meta2.note;
         title = meta?.title ?? `Gutenberg book ${ref}`;
+      } else if (provider === 'aozora') {
+        const fetched = await fetchAozoraWork(ref, languageCode);
+        body = fetched.body;
+        author = fetched.author;
+        license = PROVIDER_META.aozora.license;
+        sourceUrl = fetched.sourceUrl;
+        note = fetched.note;
+        title = aozoraByRef(ref)?.t ?? ref;
       } else {
-        const project = provider; // wikisource | wikipedia | wikinews
+        const project = provider; // wikisource | wikipedia | wikibooks | wikinews
         body = await fetchWikiPage(project, languageCode, ref);
         const meta = PROVIDER_META[provider];
         author = meta.authorOf();

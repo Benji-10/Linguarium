@@ -2017,3 +2017,681 @@ INSERT INTO knowledge.lexicon (language_code, term, reading, part_of_speech, def
   ('zh', '洗澡', 'xǐzǎo', 'verb', 'to take a shower or bath', 'en', 'community', NULL, 'mit', 'Core lexicon written for this seed: high-frequency everyday vocabulary for the pinyin/segmentation layer (HSK 3-4), transcribed by the project team - verify before relying on it.'),
   ('zh', '做饭', 'zuòfàn', 'verb', 'to cook a meal', 'en', 'community', NULL, 'mit', 'Core lexicon written for this seed: high-frequency everyday vocabulary for the pinyin/segmentation layer (HSK 3-4), transcribed by the project team - verify before relying on it.')
 ON CONFLICT (language_code, term) DO NOTHING;
+
+
+
+
+-- ---------------------------------------------------------------
+-- Starter library deepening (2026-11, per user feedback that every
+-- starter text was too short to be worth reading).
+--   * The real classics now carry their actual, longer openings
+--     (multiple paragraphs / full poems / full fables), transcribed
+--     from the cited editions with the app's own extraction pipeline
+--     (Wikisource pages, Project Gutenberg books, Aozora Bunko files
+--     for Japanese - furigana preserved).
+--   * The idempotent pattern for a lengthened/renamed text is
+--     DELETE-by-old-title + INSERT-new: a bare UPDATE-rename breaks
+--     the second seed run (the ON CONFLICT INSERT recreates the old
+--     row, then the rename collides on the unique index).
+--   * UPDATEs are used only for same-title body swaps, which are
+--     idempotent on both fresh and already-seeded databases.
+--   * The original demonstration texts for ko/zh/el/eo/tok were
+--     rewritten to full-length lessons (honest 'community'
+--     provenance: they are original texts, not real-world documents).
+-- ---------------------------------------------------------------
+DELETE FROM knowledge.shared_texts WHERE language_code = 'la' AND title = 'De Bello Gallico I.1 (opening)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('la', 'De Bello Gallico I.1-2', $$Gallia est omnis dīvīsa in partēs trēs, quārum ūnam incolunt Belgae, aliam Aquītānī, tertiam quī ipsōrum linguā Celtae, nostrā Gallī appellantur. Hī omnēs linguā, īnstitūtīs, lēgibus inter sē differunt. Gallōs ab Aquītānīs Garumna flūmen, ā Belgīs Mātrona et Sēquana dīvidit. Hōrum omnium fortissimī sunt Belgae, proptereā quod ā cultū atque hūmānitāte prōvinciae longissimē absunt, minimēque ad eōs mercātōrēs saepe commeant atque ea quae ad effēminandōs animōs pertinent important, proximīque sunt Germānīs, quī trāns Rhēnum incolunt, quibuscum continenter bellum gerunt. Quā dē causā Helvētiī quoque reliquōs Gallōs virtūte praecēdunt, quod fere cotīdiānīs proeliīs cum Germānīs contendunt, cum aut suīs fīnibus eōs prohibent aut ipsī in eōrum fīnibus bellum gerunt. Eōrum ūna, pars, quam Gallōs obtinēre dictum est, initium capit ā flūmine Rhodano, continētur Garumna flūmine, Ōceanō, fīnibus Belgārum, attingit etiam ab Sēquanīs et Helvētiīs flūmen Rhēnum, vergit ad septentriōnēs. Belgae ab extrēmīs Galliae fīnibus oriuntur, pertinent ad īnferiōrem partem flūminis Rhēnī, spectant in septentriōnem et orientem sōlem. Aquītānia ā Garumnā flūmine ad Pȳrēnaeōs montēs et eam partem Ōceanī quae est ad Hispāniam pertinet; spectat inter occāsum sōlis et septentriōnēs. Apud Helvētiōs longē nōbilissimus fuit et dītissimus Orgetorīx.$$, 'Gaius Iulius Caesar', 'https://la.wikisource.org/wiki/Commentarii_de_bello_Gallico/Liber_I', 'public-domain', 'verified', $$Commentarii de Bello Gallico, book 1, chapters 1-2 (~50 BCE, public domain). Transcribed from the Latin Wikisource edition (which marks vowel lengths - macrons - on the vowels: a learner aid of that edition, not classical spelling).$$, 'classic')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'de' AND title = 'Der Froschkönig oder der eiserne Heinrich (opening)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('de', 'Der Froschkönig oder der eiserne Heinrich (opening)', $$In den alten Zeiten, wo das Wünschen noch geholfen hat, lebte ein König, dessen Töchter waren alle schön, aber die jüngste war so schön, daß die Sonne selber, die doch so vieles gesehen hat, sich verwunderte so oft sie ihr ins Gesicht schien. Nahe bei dem Schlosse des Königs lag ein großer dunkler Wald, und in dem Walde unter einer alten Linde war ein Brunnen: wenn nun der Tag recht heiß war, so ging das Königskind hinaus in den Wald und setzte sich an den Rand des kühlen Brunnens: und wenn sie Langeweile hatte, so nahm sie eine goldene Kugel, warf sie in die Höhe und fieng sie wieder; und das war ihr liebstes Spielwerk.
+
+Nun trug es sich einmal zu, daß die goldene Kugel der Königstochter nicht in ihr Händchen fiel, das sie in die Höhe gehalten hatte, sondern vorbei auf die Erde schlug und geradezu ins Wasser hinein rollte. Die Königstochter folgte ihr mit den Augen nach, aber die Kugel verschwand, und der Brunnen war tief, so tief daß man keinen Grund sah. Da fieng sie an zu weinen und weinte immer lauter und konnte sich gar nicht trösten. Und wie sie so klagte, rief ihr jemand zu „was hast du vor, Königstochter, du schreist ja daß sich ein Stein erbarmen möchte.“ Sie sah sich um, woher die Stimme käme, da erblickte sie einen Frosch, der seinen dicken häßlichen Kopf aus dem Wasser streckte. „Ach, du bists, alter Wasserpatscher,“ sagte sie, „ich weine über meine goldene Kugel, die mir in den Brunnen hinab gefallen ist.“ „Sei still und weine nicht“, antwortete der Frosch, „ich kann wohl Rath schaffen, aber was gibst du mir, wenn ich dein Spielwerk wieder heraufhole“? „Was du haben willst, lieber Frosch,“ sagte sie, „meine Kleider, meine Perlen und Edelsteine, auch noch die goldene Krone, die ich trage.“ Der Frosch antwortete „deine Kleider, deine Perlen und Edelsteine, und deine goldene Krone, die mag ich nicht: aber wenn du mich lieb haben willst, und ich soll dein Geselle und Spielkamerad sein, an deinem Tischlein neben dir sitzen, von deinem goldenen Tellerlein essen, aus deinem Becherlein trinken, in deinem Bettlein schlafen: wenn du mir das versprichst, so will ich hinunter steigen und dir die goldene Kugel wieder herauf holen.“ „Ach ja,“ sagte sie, „ich verspreche dir alles, was du willst, wenn du mir nur die Kugel wieder bringst.“ Sie dachte aber „$$, 'Brüder Grimm', 'https://de.wikisource.org/wiki/Der_Froschk%C3%B6nig_oder_der_eiserne_Heinrich_(1857)', 'public-domain', 'verified', $$Kinder- und Hausmärchen no. 1, 1857 edition (public domain). The tale opening through the frog bargain, transcribed from the German Wikisource presentation of the 1857 edition.$$, 'classic')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'de' AND title = 'Rotkäppchen (opening)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('de', 'Rotkäppchen (opening)', $$Es war einmal eine kleine süße Dirne, die hatte jedermann lieb, der sie nur ansah, am allerliebsten aber ihre Großmutter, die wußte gar nicht was sie alles dem Kinde geben sollte. Einmal schenkte sie ihm ein Käppchen von rothem Sammet, und weil ihm das so wohl stand, und es nichts anders mehr tragen wollte, hieß es nur das Rothkäppchen. Eines Tages sprach seine Mutter zu ihm „komm, Rothkäppchen, da hast du ein Stück Kuchen und eine Flasche Wein, bring das der Großmutter hinaus; sie ist krank und schwach und wird sich daran laben. Mach dich auf bevor es heiß wird, und wenn du hinaus kommst, so geh hübsch sittsam und lauf nicht vom Weg ab, sonst fällst du und zerbrichst das Glas und die Großmutter hat nichts. Und wenn du in ihre Stube kommst, so vergiß nicht guten Morgen zu sagen und guck nicht erst in alle Ecken herum.“
+
+„Ich will schon alles gut machen“ sagte Rothkäppchen zur Mutter, und gab ihr die Hand darauf. Die Großmutter aber wohnte draußen im Wald, eine halbe Stunde vom Dorf. Wie nun Rothkäppchen in den Wald kam, begegnete ihm der Wolf. Rothkäppchen aber wußte nicht was das für ein böses Thier war und fürchtete sich nicht vor ihm. „Guten Tag, Rothkäppchen,“ sprach er. „Schönen Dank, Wolf.“ „Wo hinaus so früh, Rothkäppchen?“ „Zur Großmutter.“ „Was trägst du unter der Schürze?“ „Kuchen und Wein: gestern haben wir gebacken, da soll sich die kranke und schwache Großmutter etwas zu gut thun, und sich damit stärken.“ „Rothkäppchen, wo wohnt deine Großmutter?“ „Noch eine gute Viertelstunde weiter im Wald, unter den drei großen Eichbäumen, da steht ihr Haus, unten sind die Nußhecken, das wirst du ja wissen“ sagte Rothkäppchen. Der Wolf dachte bei sich „das junge zarte Ding, das ist ein fetter Bissen, der wird noch besser schmecken als die Alte: du mußt es listig anfangen, damit du beide erschnappst.“ Da gieng er ein Weilchen neben Rothkäppchen her, dann sprach er „Rothkäppchen, sieh einmal die schönen Blumen, die rings umher stehen, warum guckst du dich nicht um? ich glaube du hörst gar nicht, wie die Vöglein so lieblich singen? du gehst ja für dich hin als wenn du zur Schule giengst, und ist so lustig haußen in dem Wald.“
+
+Rothkäppchen schlug die Augen auf, und als es sah wie die Sonnenstrahlen durch die Bäume hin und her tanzten, und alles voll schöner Blumen stand, dachte es „wenn ich der Großmutter einen frischen Strauß mitbringe, der wird ihr auch Freude machen; es ist so früh am Tag, daß ich doch zu rechter Zeit ankomme,“ lief vom Wege ab in den Wald hinein und suchte Blumen.$$, 'Brüder Grimm', 'https://de.wikisource.org/wiki/Rothkäppchen_(1857)', 'public-domain', 'verified', $$Kinder- und Hausmärchen no. 26 (1857 edition, public domain). The opening through Little Red Cap walking into the wood, transcribed from the German Wikisource presentation of the 1857 edition.$$, 'classic')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'de' AND title = 'Hänsel und Gretel (opening)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('de', 'Hänsel und Gretel (opening)', $$Vor einem großen Walde wohnte ein armer Holzhacker mit seiner Frau und seinen zwei Kindern; das Bübchen hieß Hänsel und das Mädchen Grethel. Er hatte wenig zu beißen und zu brechen, und einmal, als große Theuerung ins Land kam, konnte er auch das täglich Brot nicht mehr schaffen. Wie er sich nun Abends im Bette Gedanken machte und sich vor Sorgen herum wälzte, seufzte er und sprach zu seiner Frau „was soll aus uns werden? wie können wir unsere armen Kinder ernähren, da wir für uns selbst nichts mehr haben?“ „Weißt du was, Mann,“ antwortete die Frau, „wir wollen Morgen in aller Frühe die Kinder hinaus in den Wald führen, wo er am dicksten ist: da machen wir ihnen ein Feuer an und geben jedem noch ein Stückchen Brot, dann gehen wir an unsere Arbeit und lassen sie allein. Sie finden den Weg nicht wieder nach Haus und wir sind sie los.“ „Nein, Frau,“ sagte der Mann, „das thue ich nicht; wie sollt ichs übers Herz bringen meine Kinder im Walde allein zu lassen, die wilden Thiere würden bald kommen und sie zerreißen.“ „O du Narr,“ sagte sie, „dann müssen wir alle viere Hungers sterben, du kannst nur die Bretter für die Särge hobelen,“ und ließ ihm keine Ruhe bis er einwilligte. „Aber die armen Kinder dauern mich doch“ sagte der Mann.
+
+Die zwei Kinder hatten vor Hunger auch nicht einschlafen können und hatten gehört was die Stiefmutter zum Vater gesagt hatte. Grethel weinte bittere Thränen und sprach zu Hänsel „nun ists um uns geschehen.“ „Still, Grethel,“ sprach Hänsel, „gräme dich nicht, ich will uns schon helfen.“ Und als die Alten eingeschlafen waren, stand er auf, zog sein Röcklein an, machte die Unterthüre auf und schlich sich hinaus. Da schien der Mond ganz helle, und die weißen Kieselsteine, die vor dem Haus lagen, glänzten wie lauter Batzen. Hänsel bückte sich und steckte so viel in sein Rocktäschlein, als nur hinein wollten. Dann gieng er wieder zurück, sprach zu Grethel „sei getrost, liebes Schwesterchen und schlaf nur ruhig ein, Gott wird uns nicht verlassen,“ und legte sich wieder in sein Bett.
+
+Als der Tag anbrach, noch ehe die Sonne aufgegangen war, kam schon die Frau und weckte die beiden Kinder, „steht auf, ihr Faullenzer, wir wollen in den Wald gehen und Holz holen.“ Dann gab sie jedem ein Stückchen Brot und sprach „da habt ihr etwas für den Mittag, aber eßts nicht vorher auf, weiter kriegt ihr nichts.“ Grethel nahm das Brot unter die Schürze, weil Hänsel die Steine in der Tasche hatte. Danach machten sie sich alle zusammen auf den Weg nach dem Wald.$$, 'Brüder Grimm', 'https://de.wikisource.org/wiki/Hänsel_und_Grethel_(1857)', 'public-domain', 'verified', $$Kinder- und Hausmärchen no. 15 (1857 edition, public domain). The opening through the family walking to the wood, transcribed from the German Wikisource presentation of the 1857 edition.$$, 'classic')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'fr' AND title = 'Le Corbeau et le Renard (opening)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('fr', 'Le Corbeau et le Renard (complete fable)', $$Maître Corbeau, sur un arbre perché,
+Tenait en son bec un fromage.
+Maître Renard, par l'odeur alléché,
+Lui tint à peu près ce langage :
+« Hé ! bonjour, Monsieur du Corbeau.
+Que vous êtes joli ! que vous me semblez beau !
+Sans mentir, si votre ramage
+Se rapporte à votre plumage,
+Vous êtes le Phénix des hôtes de ces bois. »
+À ces mots, le Corbeau ne se sent pas de joie ;
+Et pour montrer sa belle voix,
+Il ouvre large son bec, laisse tomber sa proie.
+Le Renard s'en saisit, et dit : « Mon bon Monsieur,
+Apprenez que tout flatteur
+Vit aux dépens de celui qui l'écoute :
+Cette leçon vaut bien un fromage, sans doute. »
+Le Corbeau, honteux et confus,
+Jura, mais un peu tard, qu'on ne l'y prendrait plus.$$, 'Jean de La Fontaine', NULL, 'public-domain', 'community', $$Fables, livre I, fable 2 (first published 1668, public domain). The complete fable transcribed as commonly printed; not checked against a critical edition - punctuation and line division vary between editions.$$, 'classic')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'fr' AND title = 'Il pleure dans mon cœur (opening stanzas)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('fr', 'Il pleure dans mon cœur (complete poem)', $$Il pleure dans mon cœur
+
+Comme il pleut sur la ville,
+
+Quelle est cette langueur
+
+Qui pénètre mon cœur ?
+
+Ô bruit doux de la pluie
+
+Par terre et sur les toits !
+
+Pour un cœur qui s’ennuie
+
+Ô le chant de la pluie !
+
+Il pleure sans raison
+
+Dans ce cœur qui s’écœure.
+
+Quoi ! nulle trahison ?
+
+Ce deuil est sans raison.
+
+C’est bien la pire peine
+
+De ne savoir pourquoi,
+
+Sans amour et sans haine,
+
+Mon cœur a tant de peine !$$, 'Paul Verlaine', 'https://fr.wikisource.org/wiki/Romances_sans_paroles_(1891)/Il_pleure_dans_mon_cœur', 'public-domain', 'verified', $$Romances sans paroles, 1874, complete four-stanza poem (public domain). Transcribed from the French Wikisource edition of the 1891 Vanier printing.$$, 'poem')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'it' AND title = 'Divina Commedia, Inferno I (opening tercet)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('it', 'Divina Commedia, Inferno I (opening)', $$Nel mezzo del cammin di nostra vita
+mi ritrovai per una selva oscura,
+ché la diritta via era smarrita.
+
+Ahi quanto a dir qual era è cosa dura
+esta selva selvaggia e aspra e forte
+che nel pensier rinova la paura!
+
+Tant’è amara che poco è più morte;
+ma per trattar del ben ch’i’ vi trovai,
+dirò de l’altre cose ch’i’ v’ ho scorte.
+
+Ma poi ch’i’ fui al piè d’un colle giunto,
+là dove terminava quella valle
+che m’avea di paura il cor compunto,
+
+guardai in alto e vidi le sue spalle
+vestite già de’ raggi del pianeta
+che mena dritto altrui per ogne calle.
+
+E come quei che con lena affannata,
+uscito fuor del pelago a la riva,
+si volge a l’acqua perigliosa e guata,
+
+così l’animo mio, ch’ancor fuggiva,
+si volse a retro a rimirar lo passo
+che non lasciò già mai persona viva.$$, 'Dante Alighieri', 'https://it.wikisource.org/wiki/Divina_Commedia/Inferno/Canto_I', 'public-domain', 'verified', $$Inferno, canto I, first eleven tercets (~1320, public domain). Transcribed from the Italian Wikisource edition.$$, 'classic')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'ru' AND title = 'Евгений Онегин (opening stanza)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('ru', 'Евгений Онегин (глава первая, строфы I-VIII)', $$Мой дядя самых честных правил,
+
+Когда не в шутку занемог,
+
+Он уважать себя заставил
+
+И лучше выдумать не мог;
+
+Его пример другим наука;
+
+Но, Боже мой, какая скука
+
+С больным сидеть и день и ночь,
+
+Не отходя ни шагу прочь!
+
+Какое низкое коварство
+
+Полуживого забавлять,
+
+Ему подушки поправлять,
+
+Печально подносить лекарство,
+
+Вздыхать и думать про себя:
+
+Когда же чёрт возьмет тебя!»
+
+II.
+
+Так думал молодой повеса,
+
+Летя в пыли на почтовых,
+
+Всевышней волею Зевеса
+
+Наследник всех своих родных.
+
+Друзья Людмилы и Руслана!
+
+С героем моего романа
+
+Без предисловий сей же час
+
+Позвольте познакомить вас:
+
+Онегин, добрый мой приятель,
+
+Родился на брегах Невы,
+
+Где, может быть, родились вы
+
+Или блистали, мой читатель!
+
+Там некогда гулял и я:
+
+Но вреден север для меня .
+
+III.
+
+Служив отлично, благородно,
+
+Долгами жил его отец,
+
+Давал три бала ежегодно
+
+И промотался наконец.
+
+Судьба Евгения хранила:
+
+Сперва Madame за ним ходила,
+
+Потом Monsieur её сменил.
+
+Ребёнок был резов, но мил.
+
+Monsieur l’Abbé, француз убогой,
+
+Чтоб не измучилось дитя,
+
+Учил его всему шутя,
+
+Не докучал моралью строгой,
+
+Слегка за шалости бранил
+
+И в Летний сад гулять водил.
+
+IV.
+
+Когда же юности мятежной
+
+Пришла Евгению пора,
+
+Пора надежд и грусти нежной,
+
+Monsieur прогнали со двора.
+
+Вот мой Онегин на свободе;
+
+Острижен по последней моде;
+
+Как dandy лондонский одет —
+
+И наконец увидел свет.
+
+Он по-французски совершенно
+
+Мог изъясняться и писал;
+
+Легко мазурку танцевал
+
+И кланялся непринужденно;
+
+Чего ж вам больше? Свет решил,
+
+Что он умён и очень мил.
+
+V.
+
+Мы все учились понемногу,
+
+Чему-нибудь и как-нибудь;
+
+Так воспитаньем, слава Богу,
+
+У нас немудрено блеснуть.
+
+Онегин был, по мненью многих
+
+(Судей решительных и строгих),
+
+Учёный малый, но педант.
+
+Имел он счастливый талант
+
+Без принужденья в разговоре
+
+Коснуться до всего слегка,
+
+С учёным видом знатока
+
+Хранить молчанье в важном споре
+
+И возбуждать улы$$, 'Александр Пушкин', 'https://ru.wikisource.org/wiki/Евгений_Онегин_(Пушкин)/ПСС_1977_(СО)/Глава_1', 'public-domain', 'verified', $$Евгений Онегин, chapter 1, stanzas 1-8 (published 1825-1832, public domain). Transcribed from the Russian Wikisource ПСС 1977 edition (modern orthography).$$, 'classic')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'ru' AND title = 'Зимнее утро (первая строфа)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('ru', 'Зимнее утро (полное стихотворение)', $$Мороз и солнце; день чудесный!
+
+Еще ты дремлешь, друг прелестный —
+
+Пора, красавица, проснись:
+
+Открой сомкнуты негой взоры
+
+Навстречу северной Авроры,
+
+Звездою севера явись!
+
+Вечор, ты помнишь, вьюга злилась,
+
+На мутном небе мгла носилась;
+
+Луна, как бледное пятно,
+
+Сквозь тучи мрачные желтела,
+
+И ты печальная сидела —
+
+А нынче… погляди в окно:
+
+Под голубыми небесами
+
+Великолепными коврами,
+
+Блестя на солнце, снег лежит;
+
+Прозрачный лес один чернеет,
+
+И ель сквозь иней зеленеет,
+
+И речка подо льдом блестит.
+
+Вся комната янтарным блеском
+
+Озарена. Веселым треском
+
+Трещит затопленная печь.
+
+Приятно думать у лежанки.
+
+Но знаешь: не велеть ли в санки
+
+Кобылку бурую запречь?
+
+Скользя по утреннему снегу,
+
+Друг милый, предадимся бегу
+
+Нетерпеливого коня
+
+И навестим поля пустые,
+
+Леса, недавно столь густые,
+
+И берег, милый для меня.$$, 'А. С. Пушкин', 'https://ru.wikisource.org/wiki/Зимнее_утро_(Пушкин)', 'public-domain', 'verified', $$Зимнее утро, 1829, the complete five-stanza poem (public domain). Transcribed from the Russian Wikisource edition.$$, 'poem')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'es' AND title = 'Don Quijote (opening sentence)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('es', 'Don Quijote (capítulo primero, opening)', $$En un lugar de la Mancha, de cuyo nombre no quiero acordarme, no ha mucho tiempo que vivía un hidalgo de los de lanza en astillero, adarga antigua, rocín flaco y galgo corredor. Una olla de algo más vaca que carnero, salpicón las más noches, duelos y quebrantos los sábados, lantejas los viernes, algún palomino de añadidura los domingos, consumían las tres partes de su hacienda. El resto della concluían sayo de velarte, calzas de velludo para las fiestas, con sus pantuflos de lo mesmo, y los días de entresemana se honraba con su vellorí de lo más fino. Tenía en su casa una ama que pasaba de los cuarenta, y una sobrina que no llegaba a los veinte, y un mozo de campo y plaza, que así ensillaba el rocín como tomaba la podadera. Frisaba la edad de nuestro hidalgo con los cincuenta años; era de complexión recia, seco de carnes, enjuto de rostro, gran madrugador y amigo de la caza. Quieren decir que tenía el sobrenombre de Quijada, o Quesada, que en esto hay alguna diferencia en los autores que deste caso escriben; aunque, por conjeturas verosímiles, se deja entender que se llamaba Quejana. Pero esto importa poco a nuestro cuento; basta que en la narración dél no se salga un punto de la verdad. Es, pues, de saber que este sobredicho hidalgo, los ratos que estaba ocioso, que eran los más del año, se daba a leer libros de caballerías, con tanta afición y gusto, que olvidó casi de todo punto el ejercicio de la caza, y aun la administración de su hacienda. Y llegó a tanto su curiosidad y desatino en esto, que vendió muchas hanegas de tierra de sembradura para comprar libros de caballerías en que leer, y así, llevó a su casa todos cuantos pudo haber dellos; y de todos, ningunos le parecían tan bien como los que compuso el famoso Feliciano de Silva, porque la claridad de su prosa y aquellas entricadas razones suyas le parecían de perlas, y más cuando llegaba a leer aquellos requiebros y cartas de desafíos, donde en muchas partes hallaba escrito: La razón de la sinrazón que a mi razón se hace, de tal manera mi razón enflaquece, que con razón me quejo de la vuestra fermosura. Y también cuando leía: ...los altos cielos que de vuestra divinidad divinamente con las estrellas os fortifican, y os hacen merecedora del merecimiento que merece la vuestra grandeza. Con estas razones perdía el pobre caballero el juicio, y desvelábase por entenderlas y desentrañarles el sentido, que no se lo sacara ni las entendiera el mesmo Aristóteles, si resucitara para sólo ello. No estaba muy bien con las heridas que don Belianís daba y recebía, porque se imaginaba que, por grandes maestros que le hubiesen curado, no dejaría de tener el rostro y todo el cuerpo lleno de cicatrices y señales.$$, 'Miguel de Cervantes', 'https://www.gutenberg.org/ebooks/2000', 'public-domain', 'verified', $$El ingenioso hidalgo don Quijote de la Mancha, part I, chapter 1 (1605, public domain). The chapter opening transcribed from the Project Gutenberg edition of the Spanish text.$$, 'classic')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'en' AND title = 'Alice''s Adventures in Wonderland (opening)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('en', 'Alice''s Adventures in Wonderland (chapter 1, first part)', $$CHAPTER I. Down the Rabbit-Hole
+
+Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, “and what is the use of a book,” thought Alice “without pictures or conversations?”
+
+So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.
+
+There was nothing so _very_ remarkable in that; nor did Alice think it so _very_ much out of the way to hear the Rabbit say to itself, “Oh dear! Oh dear! I shall be late!” (when she thought it over afterwards, it occurred to her that she ought to have wondered at this, but at the time it all seemed quite natural); but when the Rabbit actually _took a watch out of its waistcoat-pocket_, and looked at it, and then hurried on, Alice started to her feet, for it flashed across her mind that she had never before seen a rabbit with either a waistcoat-pocket, or a watch to take out of it, and burning with curiosity, she ran across the field after it, and fortunately was just in time to see it pop down a large rabbit-hole under the hedge.
+
+In another moment down went Alice after it, never once considering how in the world she was to get out again.
+
+The rabbit-hole went straight on like a tunnel for some way, and then dipped suddenly down, so suddenly that Alice had not a moment to think about stopping herself before she found herself falling down a very deep well.
+
+Either the well was very deep, or she fell very slowly, for she had plenty of time as she went down to look about her and to wonder what was going to happen next. First, she tried to look down and make out what she was coming to, but it was too dark to see anything; then she looked at the sides of the well, and noticed that they were filled with cupboards and book-shelves; here and there she saw maps and pictures hung upon pegs. She took down a jar from one of the shelves as she passed; it was labelled “ORANGE MARMALADE”, but to her great disappointment it was empty: she did not like to drop the jar for fear of killing somebody underneath, so managed to put it into one of the cupboards as she fell past it.
+
+“Well!” thought Alice to herself, “after such a fall as this, I shall think nothing of tumbling down stairs! How brave they’ll all think me at home! Why, I wouldn’t say anything about it, even if I fell off the top of the house!” (Which was very likely true.)
+
+Down, down, down. Would the fall _never_ come to an end? “I wonder how many miles I’ve fallen by this time?” she said aloud. “I must be getting somewhere near the centre of the earth. Let me see: that would be four thousand miles down, I think—” (for, you see, Alice had learnt several things of this sort in her lessons in the schoolroom, and though this was not a _very_ good opportunity for showing off her knowledge, as there was no one to listen to her, still it was good practice to say it over) “—yes, that’s about the right distance—but then I wonder what Latitude or Longitude I’ve got to?” (Alice had no idea what Latitude was, or Longitude either, but thought they were nice grand words to say.)
+
+Presently she began again. “I wonder if I shall fall right _through_ the earth! How funny it’ll seem to come out among the people that walk with their heads downward! The Antipathies, I think—” (she was rather glad there _was_ no one listening, this time, as it didn’t sound at all the right word) “—but I shall have to ask them what the name of the country is, you know. Please, Ma’am, is this New Zealand or Australia?” (and she tried to curtsey as she spoke—fancy _curtseying_ as you’re falling through the air! Do you think you could manage it?) “And what an ignorant little girl she’ll think me for asking! No, it’ll never do to ask: perhaps I shall see it written up somewhere.”
+
+Down, down, down. There was nothing else to do, so Alice soon began talking again. “Dinah’ll miss me very much to-night, I should think!” (Dinah was the cat.) “I hope they’ll remember her saucer of milk at tea-time. Dinah my dear! I wish you were down here with me! There are no mice in the air, I’m afraid, but you might catch a bat, and that’s very like a mouse, you know. But do cats eat bats, I wonder?” And here Alice began to get rather sleepy, and went on saying to herself, in a dreamy sort of way, “Do cats eat bats? Do cats eat bats?” and sometimes, “Do bats eat cats?” for, you see, as she couldn’t answer either question, it didn’t much matter which way she put it. She felt that she was dozing off, and had just begun to dream that she was walking hand in hand with Dinah, and saying to her very earnestly, “Now, Dinah, tell me the truth: did you ever eat a bat?” when suddenly, thump! thump!$$, 'Lewis Carroll', 'https://www.gutenberg.org/ebooks/11', 'public-domain', 'verified', $$Alice's Adventures in Wonderland, chapter 1, opening half (1865, public domain). Transcribed from Project Gutenberg ebook #11 (headings and illustration separators removed).$$, 'classic')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'ja' AND title = '吾輩は猫である (opening)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('ja', '吾輩は猫である (opening)', $$一
+
+吾輩（わがはい）は猫である。名前はまだ無い。
+
+どこで生れたかとんと見当（けんとう）がつかぬ。何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。吾輩はここで始めて人間というものを見た。しかもあとで聞くとそれは書生という人間中で一番獰悪（どうあく）な種族であったそうだ。この書生というのは時々我々を捕（つかま）えて煮（に）て食うという話である。しかしその当時は何という考もなかったから別段恐しいとも思わなかった。ただ彼の掌（てのひら）に載せられてスーと持ち上げられた時何だかフワフワした感じがあったばかりである。掌の上で少し落ちついて書生の顔を見たのがいわゆる人間というものの見始（みはじめ）であろう。この時妙なものだと思った感じが今でも残っている。第一毛をもって装飾されべきはずの顔がつるつるしてまるで薬缶（やかん）だ。その後（ご）猫にもだいぶ逢（あ）ったがこんな片輪（かたわ）には一度も出会（でく）わした事がない。のみならず顔の真中があまりに突起している。そうしてその穴の中から時々ぷうぷうと煙（けむり）を吹く。どうも咽（む）せぽくて実に弱った。これが人間の飲む煙草（たばこ）というものである事はようやくこの頃知った。
+
+この書生の掌の裏（うち）でしばらくはよい心持に坐っておったが、しばらくすると非常な速力で運転し始めた。書生が動くのか自分だけが動くのか分らないが無暗（むやみ）に眼が廻る。胸が悪くなる。到底（とうてい）助からないと思っていると、どさりと音がして眼から火が出た。それまでは記憶しているがあとは何の事やらいくら考え出そうとしても分らない。
+
+ふと気が付いて見ると書生はいない。たくさんおった兄弟が一疋（ぴき）も見えぬ。肝心（かんじん）の母親さえ姿を隠してしまった。その上今（いま）までの所とは違って無暗（むやみ）に明るい。眼を明いていられぬくらいだ。はてな何でも容子（ようす）がおかしいと、のそのそ這（は）い出して見ると非常に痛い。吾輩は藁（わら）の上から急に笹原の中へ棄てられたのである。
+
+ようやくの思いで笹原を這い出すと向うに大きな池がある。吾輩は池の前に坐ってどうしたらよかろうと考えて見た。別にこれという分別（ふんべつ）も出ない。しばらくして泣いたら書生がまた迎に来てくれるかと考え付いた。ニャー、ニャーと試みにやって見たが誰も来ない。そのうち池の上をさらさらと風が渡って日が暮れかかる。腹が非常に減って来た。泣きたくても声が出ない。仕方がない、何でもよいから食物（くいもの）のある所まであるこうと決心をしてそろりそろりと池を左（ひだ）りに廻り始めた。どうも非常に苦しい。そこを我慢して無理やりに這（は）って行くとようやくの事で何となく人間臭い所へ出た。ここへ這入（はい）ったら、どうにかなると思って竹垣の崩（くず）れた穴から、とある邸内にもぐり込んだ。縁は不思議なもので、もしこの竹垣が破れていなかったなら、吾輩はついに路傍（ろぼう）に餓死（がし）したかも知れんのである。一樹の蔭とはよく云（い）ったものだ。この垣根の穴は今日（こんにち）に至るまで吾輩が隣家（となり）の三毛を訪問する時の通路になっている。さて邸（やしき）へは忍び込んだもののこれから先どうして善（い）いか分らない。そのうちに暗くなる、腹は減る、寒さは寒し、雨が降って来るという始末でもう一刻の猶予（ゆうよ）が出来なくなった。仕方がないからとにかく明るくて暖かそうな方へ方へとあるいて行く。今から考えるとその時はすでに家の内に這入っておったのだ。ここで吾輩は彼（か）の書生以外の人間を再び見るべき機会に遭遇（そうぐう）したのである。第一に逢ったのがおさんである。これは前の書生より一層乱暴な方で吾輩を見るや否やいきなり頸筋（くびすじ）をつかんで表へ抛（ほう）り出した。いやこれ$$, '夏目漱石', 'https://ja.wikisource.org/wiki/吾輩は猫である', 'public-domain', 'verified', $$Wagahai wa Neko de Aru, chapter 1 opening (serialized from 1905, public domain). Transcribed from the Aozora Bunko edition, including its furigana annotations in parentheses.$$, 'classic')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+DELETE FROM knowledge.shared_texts WHERE language_code = 'ja' AND title = '坊っちゃん (opening)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('ja', '坊っちゃん (opening)', $$一
+
+親譲（おやゆず）りの無鉄砲（むてっぽう）で小供の時から損ばかりしている。小学校に居る時分学校の二階から飛び降りて一週間ほど腰（こし）を抜（ぬ）かした事がある。なぜそんな無闇（むやみ）をしたと聞く人があるかも知れぬ。別段深い理由でもない。新築の二階から首を出していたら、同級生の一人が冗談（じょうだん）に、いくら威張（いば）っても、そこから飛び降りる事は出来まい。弱虫やーい。と囃（はや）したからである。小使（こづかい）に負ぶさって帰って来た時、おやじが大きな眼（め）をして二階ぐらいから飛び降りて腰を抜かす奴（やつ）があるかと云（い）ったから、この次は抜かさずに飛んで見せますと答えた。
+
+親類のものから西洋製のナイフを貰（もら）って奇麗（きれい）な刃（は）を日に翳（かざ）して、友達（ともだち）に見せていたら、一人が光る事は光るが切れそうもないと云った。切れぬ事があるか、何でも切ってみせると受け合った。そんなら君の指を切ってみろと注文したから、何だ指ぐらいこの通りだと右の手の親指の甲（こう）をはすに切り込（こ）んだ。幸（さいわい）ナイフが小さいのと、親指の骨が堅（かた）かったので、今だに親指は手に付いている。しかし創痕（きずあと）は死ぬまで消えぬ。
+
+庭を東へ二十歩に行き尽（つく）すと、南上がりにいささかばかりの菜園があって、真中（まんなか）に栗（くり）の木が一本立っている。これは命より大事な栗だ。実の熟する時分は起き抜けに背戸（せど）を出て落ちた奴を拾ってきて、学校で食う。菜園の西側が山城屋（やましろや）という質屋の庭続きで、この質屋に勘太郎（かんたろう）という十三四の倅（せがれ）が居た。勘太郎は無論弱虫である。弱虫の癖（くせ）に四つ目垣を乗りこえて、栗を盗（ぬす）みにくる。ある日の夕方折戸（おりど）の蔭（かげ）に隠（かく）れて、とうとう勘太郎を捕（つら）まえてやった。その時勘太郎は逃（に）げ路（みち）を失って、一生懸命（いっしょうけんめい）に飛びかかってきた。向（むこ）うは二つばかり年上である。弱虫だが力は強い。鉢（はち）の開いた頭を、こっちの胸へ宛（あ）ててぐいぐい押（お）した拍子（ひょうし）に、勘太郎の頭がすべって、おれの袷（あわせ）の袖（そで）の中にはいった。邪魔（じゃま）になって手が使えぬから、無暗に手を振（ふ）ったら、袖の中にある勘太郎の頭が、右左へぐらぐら靡（なび）いた。しまいに苦しがって袖の中から、おれの二の腕（うで）へ食い付いた。痛かったから勘太郎を垣根へ押しつけておいて、足搦（あしがら）をかけて向うへ倒（たお）してやった。山城屋の地面は菜園より六尺がた低い。勘太郎は四つ目垣を半分崩（くず）して、自分の領分へ真逆様（まっさかさま）に落ちて、ぐうと云った。勘太郎が落ちるときに、おれの袷の片袖がもげて、急に手が自由になった。その晩母が山城屋に詫（わ）びに行ったついでに袷の片袖も取り返して来た。
+
+この外いたずらは大分やった。大工の兼公（かねこう）と肴屋（さかなや）の角（かく）をつれて、茂作（もさく）の人参畠（にんじんばたけ）をあらした事がある。人参の芽が出揃（でそろ）わぬ処（ところ）へ藁（わら）が一面に敷（し）いてあったから、その上で三人が半日相撲（すもう）をとりつづけに取ったら、人参がみんな踏（ふ）みつぶされてしまった。古川（ふるかわ）の持っている田圃（たんぼ）の井戸（いど）を埋（う）めて尻（しり）を持ち込まれた事もある。太い孟宗（もうそう）の節を抜いて、深く埋めた中から水が湧（わ）き出て、そこいらの稲（いね）にみずがかかる仕掛（しかけ）であった。その時分はどんな仕掛か知らぬから、石や棒（ぼう）ちぎれをぎゅうぎゅう井戸の中へ挿（さ）し込んで、水が出なくなったのを見届けて、うちへ帰って飯を食っていたら、古川が真赤（まっか）になっ$$, '夏目漱石', 'https://www.aozora.gr.jp/cards/000148/card752.html', 'public-domain', 'verified', $$Bocchan, chapter 1 opening (1906, public domain). Transcribed from the Aozora Bunko edition, including its furigana annotations in parentheses.$$, 'classic')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  (
+    'ja',
+    '走れメロス (opening)',
+    $$メロスは激怒した。必ず、かの邪智暴虐（じゃちぼうぎゃく）の王を除かなければならぬと決意した。メロスには政治がわからぬ。メロスは、村の牧人である。笛を吹き、羊と遊んで暮して来た。けれども邪悪に対しては、人一倍に敏感であった。きょう未明メロスは村を出発し、野を越え山越え、十里はなれた此（こ）のシラクスの市にやって来た。メロスには父も、母も無い。女房も無い。十六の、内気な妹と二人暮しだ。この妹は、村の或る律気な一牧人を、近々、花婿（はなむこ）として迎える事になっていた。結婚式も間近かなのである。メロスは、それゆえ、花嫁の衣裳やら祝宴の御馳走やらを買いに、はるばる市にやって来たのだ。先ず、その品々を買い集め、それから都の大路をぶらぶら歩いた。メロスには竹馬の友があった。セリヌンティウスである。今は此のシラクスの市で、石工をしている。その友を、これから訪ねてみるつもりなのだ。久しく逢わなかったのだから、訪ねて行くのが楽しみである。歩いているうちにメロスは、まちの様子を怪しく思った。ひっそりしている。もう既に日も落ちて、まちの暗いのは当りまえだが、けれども、なんだか、夜のせいばかりでは無く、市全体が、やけに寂しい。のんきなメロスも、だんだん不安になって来た。路で逢った若い衆をつかまえて、何かあったのか、二年まえに此の市に来たときは、夜でも皆が歌をうたって、まちは賑やかであった筈（はず）だが、と質問した。若い衆は、首を振って答えなかった。しばらく歩いて老爺（ろうや）に逢い、こんどはもっと、語勢を強くして質問した。老爺は答えなかった。メロスは両手で老爺のからだをゆすぶって質問を重ねた。老爺は、あたりをはばかる低声で、わずか答えた。
+
+「王様は、人を殺します。」
+
+「なぜ殺すのだ。」
+
+「悪心を抱いている、というのですが、誰もそんな、悪心を持っては居りませぬ。」
+
+「たくさんの人を殺したのか。」
+
+「はい、はじめは王様の妹婿さまを。それから、御自身のお世嗣（よつぎ）を。それから、妹さまを。それから、妹さまの御子さまを。それから、皇后さまを。それから、賢臣のアレキス様を。」
+
+「おどろいた。国王は乱心か。」
+
+「いいえ、乱心ではございませぬ。人を、信ずる事が出来ぬ、というのです。このごろは、臣下の心をも、お疑いになり、少しく派手な暮しをしている者には、人質ひとりずつ差し出すことを命じて居ります。御命令を拒めば十字架にかけられて、殺されます。きょうは、六人殺されました。」
+
+聞いて、メロスは激怒した。「呆（あき）れた王だ。生かして置けぬ。」
+
+メロスは、単純な男であった。買い物を、背負ったままで、のそのそ王城にはいって行った。たちまち彼は、巡邏（じゅんら）の警吏に捕縛された。調べられて、メロスの懐中からは短剣が出て来たので、騒ぎが大きくなってしまった。メロスは、王の前に引き出された。
+
+「この短刀で何をするつもりであったか。言え！」暴君ディオニスは静かに、けれども威厳を以（もっ）て問いつめた。その王の顔は蒼白（そうはく）で、眉間（みけん）の皺（しわ）は、刻み込まれたように深かった。
+
+「市を暴君の手から救うのだ。」とメロスは悪びれずに答えた。
+
+「おまえがか？」王は、憫笑（びんしょう）した。「仕方の無いやつじゃ。おまえには、わしの孤独がわからぬ。」
+
+「言うな！」とメロスは、いきり立って反駁（はんばく）した。「人の心を疑うのは、最も恥ずべき悪徳だ。王は、民の忠誠をさえ疑って居られる。」
+
+「疑うのが、正当の心構えなのだと、わしに教えてくれたのは、おまえたちだ。人の心は、あてにならない。人間は、もともと私慾のかたまりさ。信じては、ならぬ。」暴君は落着いて呟（つぶや）き、ほっと溜息（ためいき）をついた。「わしだって、平和を望んでいるのだが。」
+
+「なんの為の平和だ。自分の地位を守る為か。」こんどはメロスが嘲笑した。「罪の無い人を殺して、何が平和だ。」
+
+「だまれ、下賤（げせん）の者。」王は、さっと顔を挙げて報いた。「口では、どんな清らかな事でも言える。わしには、人の腹綿の奥底が見え透いてならぬ。おまえだって、いまに、磔（はりつけ）になってから、泣いて詫（わ）びたって聞かぬぞ。」
+
+「ああ、王は悧巧（りこう）だ。自惚（うぬぼ）れているがよい。私は、ちゃんと死ぬる覚悟で居るのに。命乞いなど決してしない。ただ、――」と言いかけて、メロスは足もとに視線を落し瞬時ためらい、「ただ、私に情をかけたいつもりなら、処刑までに三日間の日限を与えて下さい。たった一人の妹に、亭主を持たせてやりたいのです。三日のうちに、私は村で結婚式を挙げさせ、必ず、ここへ帰って来ます。」
+
+「ばかな。」と暴君は、嗄（しわが）れた声で低く笑った。「とんでもない嘘（うそ）を言うわい。逃がした小$$,
+    '太宰治',
+    'https://www.aozora.gr.jp/cards/000035/card1567.html',
+    'public-domain',
+    'verified',
+    'Hashire Melos, opening (published 1940; the author died in 1948, public domain since 2019 in Japan). Transcribed from the Aozora Bunko edition, including its furigana annotations in parentheses.',
+    'classic'
+  ),
+  (
+    'ja',
+    '銀河鉄道の夜 (opening)',
+    $$一、午后の授業
+
+「ではみなさんは、さういふふうに川だと云はれたり、乳の流れたあとだと云はれたりしてゐたこのぼんやりと白いものがほんたうは何かご承知ですか。」先生は、黒板に吊した大きな黒い星座の図の、上から下へ白くけぶった銀河帯のやうなところを指しながら、みんなに問をかけました。
+
+カムパネルラが手をあげました。それから四五人手をあげました。ジョバンニも手をあげやうとして、急いでそのまゝやめました。たしかにあれがみんな星だと、いつか雑誌で読んだのでしたが、このごろはジョバンニはまるで毎日教室でもねむく、本を読むひまも読む本もないので、なんだかどんなこともよくわからないといふ気持ちがするのでした。
+
+ところが先生は早くもそれを見附けたのでした。
+
+「ジョバンニさん。あなたはわかってゐるのでせう。」
+
+ジョバンニは勢よく立ちあがりましたが、立って見るともうはっきりとそれを答へることができないのでした。ザネリが前の席からふりかへって、ジョバンニを見てくすっとわらひました。ジョバンニはもうどぎまぎしてまっ赤になってしまひました。先生がまた云ひました。
+
+「大きな望遠鏡で銀河をよっく調べると銀河は大体何でせう。」
+
+やっぱり星だとジョバンニは思ひましたがこんどもすぐに答へることができませんでした。
+
+先生はしばらく困ったやうすでしたが、眼をカムパネルラの方へ向けて、「ではカムパネルラさん。」と名指しました。するとあんなに元気に手をあげたカムパネルラが、やはりもぢもぢ立ち上ったまゝやはり答へができませんでした。
+
+先生は意外なやうにしばらくぢっとカムパネルラを見てゐましたが、急いで「では。よし。」と云ひながら、自分で星図を指しました。
+
+「このぼんやりと白い銀河を大きないゝ望遠鏡で見ますと、もうたくさんの小さな星に見えるのです。ジョバンニさんさうでせう。」
+
+ジョバンニはまっ赤になってうなづきました。けれどもいつかジョバンニの眼のなかには涙がいっぱいになりました。さうだ僕は知ってゐたのだ、勿論カムパネルラも知ってゐる、それはいつかカムパネルラのお父さんの博士のうちでカムパネルラといっしょに読んだ雑誌のなかにあったのだ。それどこでなくカムパネルラは、その雑誌を読むと、すぐお父さんの書〔斎〕から巨きな本をもってきて、ぎんがといふところをひろげ、まっ黒な頁いっぱいに白い点々のある美しい写真を二人でいつまでも見たのでした。それをカムパネルラが忘れる筈もなかったのに、すぐに返事をしなかったのは、このごろぼくが、朝にも午后にも仕事がつらく、学校に出てももうみんなともはきはき遊ばず、カムパネルラともあんまり物を云はないやうになったので、カムパネルラがそれを知って気の毒がってわざと返事をしなかったのだ、さう考へるとたまらないほど、じぶんもカムパネルラもあはれなやうな気がするのでした。
+
+先生はまた云ひました。
+
+「ですからもしもこの天の川がほんたうに川だと考へるなら、その一つ一つの小さな星はみんなその川のそこの砂や砂利の粒にもあたるわけです。またこれを巨きな乳の流れと考へるならもっと天の川とよく似てゐます。つまりその星はみな、乳のなかにまるで細かにうかんでゐる脂油の球にもあたるのです。そんなら何がその川の水にあたるかと云ひますと、それは真空といふ光をある速さで伝へるもので、太陽や地球もやっぱりそのなかに浮んでゐるのです。つまりは私どもも天の川の水のなかに棲んでゐるわけです。そしてその天の川の水のなかから四方を見ると、ちゃうど水が深いほど青く見えるやうに、天の川の底の深く遠いところほど星がたくさん集って見えしたがって白くぼんやり見えるのです。この模型をごらんなさい。」
+
+先生は中にたくさん光る砂のつぶの入った大きな両面の凸レンズを指しました。
+
+「天の川の形はちゃうどこんななのです。このいちいちの光るつぶがみんな私どもの太陽と同じやうにじぶんで光ってゐる星だと考へます。私どもの太陽がこのほゞ中ごろにあって地球がそのすぐ近くにあるとします。みなさんは夜にこのまん中に立ってこのレンズの中を見まはすとしてごらんなさい。こっちの方はレンズが薄いのでわづかの光る粒即ち星しか見えないのでせう。こっちやこっちの方はガラスが厚いので、光る粒即ち星がたくさん見えその遠いのはぼうっと白く見えるといふこれがつまり今日の銀河の説なのです。そんならこのレンズの大きさがどれ位あるかまた〔〕その中のさまざまの星についてはもう時間ですからこの次の理科の時間にお話します。では今日はその銀河のお祭なのですからみなさんは外へでてよくそらをごらんなさい。ではこゝまでです。本やノートをおしまひなさい。」
+
+そして教室中はしばらく机の蓋をあけたりしめたり本を重ねたりする音がいっぱいでしたがまもなくみ$$,
+    '宮沢賢治',
+    'https://www.aozora.gr.jp/cards/000081/card48222.html',
+    'public-domain',
+    'verified',
+    'Ginga Tetsudo no Yoru, opening (written early 1920s-1934, public domain). Transcribed from the Aozora Bunko edition, including its furigana annotations in parentheses.',
+    'classic'
+  ),
+  (
+    'zh',
+    '桃花源記 (complete)',
+    $$晉太元中，武陵人捕魚爲業。緣溪行，忘路之遠近。忽逢桃花林，夾岸數百步，中無雜樹，芳草鮮美，落英繽紛。漁人甚異之。復前行，欲窮其林。林盡水源，便得一山，山有小口，髣髴若有光。便捨船，從口入，初極狹，纔通人。復行數十步，豁然開朗。土地平曠，屋舍儼然。有良田、美池、桑竹之屬。阡陌交通，鷄犬相聞。其中往來種作，男女衣著，悉如外人。黃髮垂髫，並怡然自樂。見漁人，乃大驚，問所從來，具答之。便要還家，爲設酒殺鷄作食。村中聞有此人，咸來問訊。自云先世避秦時亂，率妻子邑人來此絶境，不復出焉，遂與外人間隔。問今是何世，乃不知有漢，無論魏晉。此人一一爲具言所聞，皆歎惋。餘人各復延至其家，皆出酒食。停數日，辭去。此中人語云：「不足爲外人道也。」既出，得其船，便扶向路，處處誌之。及郡下，詣太守，説如此。太守即遣人隨其往，尋向所誌，遂迷，不復得路。南陽劉子驥，高尚士也。聞之，欣然規往。未果，尋病終。後遂無問津者$$,
+    '陶淵明',
+    'https://zh.wikisource.org/wiki/桃花源記',
+    'public-domain',
+    'verified',
+    'The Peach Blossom Spring (Tao Yuanming, ~421 CE, public domain), complete classical text. Transcribed from the Chinese Wikisource edition with its critical apparatus removed; characters follow that edition (traditional).',
+    'classic'
+  )
+ON CONFLICT (language_code, title) DO NOTHING;
+UPDATE knowledge.shared_texts SET
+  body = $$일요일 아침에 나는 늦게 일어났습니다. 창밖에 새가 노래를 했습니다. 날씨가 맑아서 기분도 좋았습니다. 나는 세수를 하고, 아침을 먹었습니다. 밥과 국, 그리고 김치를 먹었습니다. 그리고 커피를 한 잔 마셨습니다. 커피 향기가 집 안에 가득했습니다. 책상에 앉아서 책을 읽었습니다. 책이 재미있어서 시간이 빨리 지났습니다. 두 시간쯤 읽은 다음에 눈이 좀 아파서 잠시 쉬었습니다.
+
+점심쯤에 친구에게 전화를 걸었습니다. 친구도 집에서 쉬고 있었습니다. 우리는 같이 산책하기로 했습니다. 두 시에 공원 앞에서 만났습니다. 공원에 사람이 많았습니다. 날씨가 좋았기 때문입니다. 우리는 공원을 천천히 걸으면서 이야기를 나누었습니다. 친구는 요즘 새로운 일을 시작했다고 했습니다. 처음에는 힘들지만 점점 익숙해지고 있다고 했습니다. 나는 친구가 자랑스러웠습니다. 친구는 또 여름에 제주도에 가고 싶다고 했습니다. 나도 같이 가고 싶다고 대답했습니다.
+
+길이에 나무 아래에 앉아서 차를 마셨습니다. 바람이 살랑살랑 불었습니다. 어디선가 아이들 웃는 소리가 들렸습니다. 나는 이런 시간이 참 좋다고 생각했습니다. 사진도 한 장 찍었습니다. 하늘에는 구름이 몇 개 떠 있었습니다.
+
+저녁에는 집에 돌아와서 국수를 끓여 먹었습니다. 국물이 뜨거웠지만 맛있었습니다. 그리고 조용히 음악을 들었습니다. 오래 들었던 노래가 나왔습니다. 그 노래를 들으니 옛날 생각이 났습니다. 조금은 씁쓸하고 조금은 따뜻한 기분이었습니다.
+
+창밖으로 해가 지는 것을 보았습니다. 하루가 이렇게 끝나간다는 것이 아쉬웠습니다. 하지만 오늘은 평화로운 하루였습니다. 내일은 다시 일찍 일어나야 합니다. 아침 회의가 있기 때문입니다. 그래서 일찍 잠들었습니다. 이불 속이 따뜻했습니다. 눈을 감자 잠이 곧 왔습니다.$$,
+  source_ref = 'Original demonstration text written for this project. Everyday vocabulary, polite -습니다 style, past-tense narration.',
+  provenance = 'community'
+WHERE language_code = 'ko' AND title = '일요일 (a Sunday diary)';
+
+UPDATE knowledge.shared_texts SET
+  body = $$옛날에 마을에 작은 고양이 한 마리가 살았습니다. 고양이는 밤마다 지붕에 올라가서 달을 보았습니다. 달은 둥글고 밝았습니다. 고양이는 달을 보고 있으면 마음이 편해졌습니다.
+
+어느 날 밤, 고양이는 생각했습니다. "저 달을 만져 보고 싶다." 그래서 고양이는 높은 산으로 달을 따라 올라갔습니다. 산길은 험했습니다. 돌멩이에 발이 다쳤습니다. 그래도 고양이는 계속 올라갔습니다. 산꼭대기에 도착했지만, 달은 여전히 멀리 있었습니다. 고양이는 다리가 아파서 주저앉았습니다. 고양이는 처음으로 슬펐습니다.
+
+그때 아래에 연못이 보였습니다. 연못 안에도 달이 있었습니다. 그 달은 산 위의 달보다 훨씬 가까워 보였습니다. 고양이는 기뻐서 연못으로 달려갔습니다. 그러나 발이 물에 닿는 순간, 물이 출렁이면서 달은 사라졌습니다. 고양이는 젖은 발을 보면서 한숨을 쉬었습니다. 잔물결이 사라지자 달은 다시 연못에 나타났습니다. 그러나 손을 뻗으면 또 사라질 것 같았습니다.
+
+고양이는 연못가에 오래 앞 있었습니다. 두 달, 세 달, 고양이는 밤마다 연못을 찾아갔습니다. 어떤 밤에는 구름이 달을 가렸습니다. 어떤 밤에는 비가 와서 연못이 흐려졌습니다. 그런 밤에 고양이는 집으로 돌아와서 아무 말도 하지 않았습니다.
+
+그날 밤, 고양이는 다시 지붕 위에 앉았습니다. 머리 위에 달이 떠 있었습니다. 달은 어제처럼 아름다웠습니다. 고양이는 조용히 웃었습니다. "달은 구경하는 것만으로 충분하다."
+
+그 후로 고양이는 매일 밤 지붕에서 달을 구경했습니다. 때때로 구름 사이로 달이 반쯤 보였고, 그것도 예뻤습니다. 고양이는 알게 되었습니다. 멀리 있는 것을 쫓아가지 않아도, 그것을 바라보는 것만으로 충분히 가까워질 수 있다는 것을.$$,
+  source_ref = 'Original demonstration text written for this project. Everyday vocabulary, simple narrative past tense with common everyday verbs.',
+  provenance = 'community'
+WHERE language_code = 'ko' AND title = '고양이와 달 (the cat and the moon)';
+
+UPDATE knowledge.shared_texts SET
+  body = $$어제 밤에 첫눈이 왔습니다. 아침에 일어나서 창밖을 보니, 세상이 하얗게 변해 있었습니다. 지붕과 길과 나무 위에 눈이 쌓였습니다. 나무마다 하얀 꽃이 핀 것 같았습니다. 참을 수 없이 밖으로 나가고 싶었습니다.
+
+나는 따뜻한 옷을 입고 밖으로 나갔습니다. 공기가 차고 상쾌했습니다. 숨을 쉬면 입에서 김이 나왔습니다. 아이들이 밖에 나와서 눈싸움을 하고 있었습니다. 어떤 아이는 커다란 눈사람을 만들고 있었습니다. 눈사람에게는 양말 모자를 씌워 주었습니다. 어떤 아이는 썰매를 타고 언덕에서 내려왔습니다. 웃음소리가 골목에 가득했습니다.
+
+나도 눈을 한 줌 집어서 하늘로 던졌습니다. 눈송이가 얼굴에 닿았을 때, 어린 시절이 갑자기 떠올랐습니다. 그때도 친구들과 함께 눈덩이를 굴렸습니다. 눈이 이렇게 많이 오면 학교 앞 언덕이 미끄러워서 매번 넘어졌습니다. 그때는 그것이 부끄러웠지만 지금 생각하면 웃음이 납니다. 옛날 친구들은 지금 각자 다른 도시에서 삽니다. 눈이 오면 그 친구들도 이 눈을 보고 있을까요?
+
+나는 오래 서서 그런 생각을 했습니다. 발이 시려왔습니다. 그래도 발길이 쉽게 떨어지지 않았습니다. 밤이 되자 가로등 불빛에 눈이 반짝반짝 빛났습니다. 정말 아름다웠습니다. 나는 코가 빨갛게 될 때까지 밖에 있었습니다.
+
+집에 들어와서 뜨거운 차를 한 잔 마셨습니다. 손이 점점 따뜻해졌습니다. 창밖에는 눈이 아직도 조용히 내리고 있었습니다. 겨울이 왔다는 생각에 마음이 이상하게 들떴습니다. 내년 봄까지 기다려야 할 일들이 많이 있습니다. 그래도 오늘 밤은 그냥 눈 소리를 들으며 잠들고 싶었습니다. 내일은 일찍 일어나서 눈길을 걸어 보고 싶습니다. 눈이 그치기 전에요.$$,
+  source_ref = 'Original demonstration text written for this project. Everyday vocabulary, polite -습니다 style, past-tense narration.',
+  provenance = 'community'
+WHERE language_code = 'ko' AND title = '첫 눈 (the first snow)';
+
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('ko', '도서관에서 보낸 오후 (an afternoon at the library)', $$토요일 오후에 나는 도서관에 갔습니다. 도서관은 우리 집에서 걸어서 십 분쯤 걸립니다. 가는 길에 벚나무가 있는 작은 골목이 있습니다. 그 골목을 지날 때마다 기분이 조용해집니다.
+
+도서관 안은 조용했습니다. 사람들이 책을 읽고 있었습니다. 누구도 큰 소리로 말하지 않았습니다. 나는 신문지 코너에 가서 좋아하는 잡지를 한 권 골랐습니다. 그리고 창가 자리에 앉았습니다. 창밖으로는 나무들이 보였습니다. 바람이 불 때마다 잎이 흔들렸습니다.
+
+옆 자리에 나이 드신 분이 앉아 있었습니다. 그분은 안경을 쓰고 오래된 책을 읽고 있었습니다. 가끔 중요한 부분에 표시를 했습니다. 그 뒤에 대학생들이 와서 자리를 잡았습니다. 다들 책과 노트를 펼쳐 놓고 열심히 썼습니다. 도서관에는 이런 소리만 들렸습니다. 페이지 넘기는 소리, 연필 쓰는 소리, 기지개 켜는 소리.
+
+나는 잡지를 다 읽고 나서 소설 코너로 갔습니다. 서가 사이를 천천히 걸었습니다. 오래된 책들에게서는 종이 냄새가 났습니다. 어떤 책은 이름을 여러 번 들었지만 읽지 않은 책이었습니다. 어떤 책은 이름도 처음 보는 책이었습니다. 나는 한 권을 꺼내서 첫 페이지를 읽어 보았습니다. 재미있을 것 같아서 빌리기로 했습니다.
+
+대출 계산대 앞에는 두 사람이 줄을 서 있었습니다. 앞의 아이는 그림책을 세 권 빌렸습니다. 사서 선생님은 아이에게 조용히 웃어 주었습니다. 내 차례가 되어서 학생증을 내밀었습니다. 사서 선생님이 말했습니다. "이책은 이 주 동안 빌릴 수 있어요." 나는 고맙다고 하고 도서관을 나왔습니다.
+
+밖에는 해가 기울고 있었습니다. 간이 아까 골목보다 더 조용했습니다. 나는 책을 가방에 넣고 천천히 걸었습니다. 집에 가서 저녁을 먹고 한두 장 읽으면서 잠들 것 같았습니다. 좋은 책을 만나는 날은 좋은 날입니다.$$, 'Linguarium demonstration content (project team)', NULL, 'unspecified (demo)', 'community', 'Original demonstration text written for this project. Everyday vocabulary, polite -습니다 style, past-tense narration.', 'daily-life'),
+  ('ko', '우리 동네 이웃들 (the neighbors of my district)', $$우리 동네는 큰 도시만큼 크지 않지만 살기 좋은 곳입니다. 이십 년쯤 된 주택가입니다. 길 양쪽에는 나무가 많고, 골목마다 작은 가게들이 있습니다. 아침이면 그 가게들 문이 하나둘 열립니다.
+
+우리 집 앞에는 편의점이 있습니다. 그 편의점에는 아주머니 한 분이 일하십니다. 그분은 언제나 웃으면서 손님을 맞습니다. 나는 가끔 거기서 우유나 빵을 삽니다. 어느 날 우산을 두고 간 적이 있는데, 다음 날 그분이 챙겨 주었습니다. 그런 작은 일이 동네를 따뜻하게 만듭니다.
+
+편의점 옆에는 약국이 있습니다. 약사 선생님은 이 동네에서 제일 오래 사신 분입니다. 동네 일이라면 무엇이든 아십니다. 누가 어디로 이사했고, 어떤 가게가 들어설지도 미리 아는 것 같습니다. 병에 걸려 약을 사러 가면, 약에 대해 조심스럽게 설명해 주십니다.
+
+골목 안쪽에는 철물점이 있습니다. 그 집 영감님은 손이 참 좋습니다. 꼭지가 고장 났을 때 도와주러 오셨습니다. 일은 빨리 하면서도 구석구석 확인해 주십니다. 그리고 돈을 그리 많이 받지 않습니다. 엄마는 언제나 감사의 뜻으로 과일을 드렸습니다.
+
+나는 어릴 때부터 이 동네에서 자랐습니다. 친구들은 조금씩 이곳을 떠났습니다. 그래도 설에 고향 같은 동네로 돌아오는 기분은 변하지 않았습니다. 요즘은 새로운 사람들이 많이 들어왔습니다. 젊은 부부들이 아파트를 얻어 삽니다. 그들이 동네를 바꾸고 있는데, 좋은 방향으로 바꾸고 있다고 생각합니다.
+
+동네는 사람이 만듭니다. 큰 사건이 아니라, 안녕하세요 한마디, 쓰레기 잘 분리하는 것, 고맙습니다 소리가 동네를 만듭니다. 나도 이 동네의 한 사람으로서 그런 작은 일을 이어 가고 싶습니다.$$, 'Linguarium demonstration content (project team)', NULL, 'unspecified (demo)', 'community', 'Original demonstration text written for this project. Everyday vocabulary, plain expository -다 style.', 'culture')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+UPDATE knowledge.shared_texts SET
+  body = $$早上七点，闹钟响了。我起床、洗脸、刷牙，然后换好衣服。妈妈已经做好了早饭：包子、鸡蛋，还有一碗热豆浆。我一边吃一边看窗外的天气。今天是个晴天，蓝天上只有几朵白云。
+
+八点半，我去学校。路上经过一家小书店，书店门口的猫还在睡觉。上午我有两节课：数学和语文。数学有点难，但是老师讲得很清楚，我把不会的地方都记在了本子上。语文课上我们读了一篇写秋天的文章，文章里有几句话我很喜欢。
+
+中午我和同学一起去食堂吃饭。今天有米饭、青菜、西红柿炒鸡蛋，还有一个汤。我们都吃得干干净净。吃完饭，我们在操场边走了一会儿，聊了聊周末的计划。有人想去爬山，有人想去看电影。
+
+下午没有课。我先在图书馆看了一会儿书，然后去操场打了半小时篮球。打完球，出了一身汗，觉得特别舒服。回家的路上，我买了一个刚出炉的面包，闻起来很香。
+
+晚上吃完饭，我帮妈妈洗了碗，然后写作业。作业不算多，九点半就写完了。我又看了几页课外书，是一本关于宇宙的书。书上说，我们看到的星光，有的走了几百年才到地球。我觉得很神奇。
+
+十点半，我上床睡觉。窗外的月亮很亮。今天是普通但是舒服的一天。明天要早起，所以晚安，世界。$$,
+  source_ref = 'Original demonstration text written for this project. High-frequency daily vocabulary, simple sentence patterns.',
+  provenance = 'community'
+WHERE language_code = 'zh' AND title = '我的一天 (my day)';
+
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('zh', '周末的菜市场 (the weekend market)', $$星期六早上，我和奶奶一起去菜市场买菜。菜市场离我们家不远，走路只要十分钟。还没进门，就听见了热闹的声音：卖菜的人在大声吆喝，买东西的人在问价钱，还有自行车铃的声音。
+
+菜市场里什么都有。青菜水淋淋的，看着就很新鲜；鱼在水里游来游去；豆腐又白又软，一碰就想掉。奶奶买菜很认真，她拿起一把青菜，先看叶子，再掐一掐根部，最后才问价钱。她告诉我，买菜要挑当季的，又便宜又好吃。
+
+我们在一个摊位前停了下来。卖菜的是一位大姐，她家的西红柿特别好，红得发亮。奶奶挑了六个西红柿、两根黄瓜，还有一把小葱。大姐又送了我们两根香菜，说：香菜放汤里最香。奶奶笑着说了声谢谢。
+
+接着我们去了卖肉的摊位。奶奶买了一条排骨，准备晚上做汤。又买了一只鸡，让老板切成小块。老板的动作很快，几刀就切好了，用袋子装得整整齐齐。
+
+回家的路上，奶奶提着菜，我拿着水果。我们买了我爱吃的橘子和苹果。奶奶说，她年轻的时候，这个市场还没有这么大，买东西要排队，有时候还要用票。现在想买什么就有什么，日子真是好了。
+
+我帮奶奶把菜提上楼，胳膊有点酸，但是心里很高兴。晚上，奶奶做了西红柿鸡蛋汤，汤里有那天买的香菜。喝着汤，我想：一饭一菜，都来得不容易。以后我要多多帮忙，少让奶奶操心。$$, 'Linguarium demonstration content (project team)', NULL, 'unspecified (demo)', 'community', 'Original demonstration text written for this project. Everyday narrative with market and family vocabulary.', 'daily-life')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+UPDATE knowledge.shared_texts SET
+  body = $$Σήμερα το πρωί έβρεξε πολύ. Ο ουρανός ήταν γκρι και τα πουλιά δεν τραγουδούσαν. Πήρα την ομπρέλα μου και πήγα στη δουλειά με τα πόδια. Στο δρόμο, το νεράκι κυλούσε στα φύλλα των δέντρων και οι άνθρωποι περπατούσαν γρήγορα με τα πανωφόρια τους. Ένα αυτοκίνητο πέρασε από την λακκούβα και λερώθηκε το παντελόνι μου. Γέλασα μόνος μου: τέτοια μέρα είναι σήμερα.
+
+Το μεσημέρι η βροχή σταμάτησε λίγο. Πήγα στην καφετέρια της γωνίας και ήπια έναν καφέ. Το μαγαζί ήταν ζεστό και μύριζε φρεσκοψημένο ψωμί. Δίπλα μου, ένας ηλικιωμένος κύριος διάβαζε εφημερίδα και μια κυρία μιλούσε στο τηλέφωνο δυνατά. Έξω, οι στέγες των σπιτιών άνοιξαν και έκλειναν τις σκαλιές τους.
+
+Το απόγευμα ο ήλιος βγήκε ξαφνικά και ο ουρανός έγινε γαλάζιος. Οι βροχές σταμάτησαν και τα σύννεφα πήγαν σε άλλα μέρη. Το πάρκο κοντά στο σπίτι μου γέμισε κόσμο. Πήρα έναν καφέ και κάθισα σε ένα παγκάκι. Δύο παιδιά έπαιζαν μπάλα. Μια γυναίκα διάβαζε βιβλίο κάτω από ένα δέντρο. Ένας νεαρός φωτογράφιζε τις λιμνούλες του νερού. Όλοι βιάζονταν να ζήσουν το φως.
+
+Το βράδυ φύσηξε λίγο άνεμος και έκανε δροσιά. Περπάτησα στην προκυμαία και άκουσα τα κύματα. Το νερό ήταν ακόμα θολό από τη βροχή, μα η θάλασσα ήταν ήσυχη. Τα φώτα της πόλης άναψαν ένα ένα, πρώτα τα μαγαζιά, μετά τα σπίτια. Περπάτησα αργά και δεν βιαζόμουν να γυρίσω.
+
+Αύριο λένε ότι θα έχει ήλιο. Ελπίζω να πάω για περπάτημα στη θάλασσα με τους φίλους μου και να φάμε παγωτό. Το πρωί όμως θέλω να ξυπνήσω νωρίς, γιατί η μέρα μετά τη βροχή μυρίζει πάντα καθαρή. Τέτοιες μέρες, από τη βροχή στο ήλιο, είναι οι καλύτερες: βρέχει και μετά χαίρεσαι.$$,
+  source_ref = 'Original demonstration text written for this project. Everyday Modern Greek with weather and mood vocabulary.',
+  provenance = 'community'
+WHERE language_code = 'el' AND title = 'Ο καιρός σήμερα (the weather today)';
+
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  ('eo', 'Sabato en la urbo (a Saturday in town)', $$Sabate matene mi vekigxis frue, sed mi ne ellitis tuj. Mi auskultis la pluvon sur la fenestro kaj pensis pri la tago antaux mi. Post kelkaj minutoj mi ellitis, mangxis panon kun fromagxo kaj trinkis teon. La teo estis varma kaj bona.
+
+Mi decidis viziti la urbon centron. Mi prenis la buson cxar la biciklo havis platigitan radon. La buso estis plena da homoj, kiuj volis familio aĉeti mangxon aû viziti la merkaton. Unu avino sidis apud mi kaj rakontis pri siaj nepoj. SXi parolis rapide, sed kun granda gxojo. Mi auxskultis kaj kap-jesis.
+
+En la centro mi unue iris al la librobutiko. Gxi estas malgranda, sed tre purposas. La posedanto konas min; li cxiam rekomendas al mi novajn librojn. Hodiaux li montris al mi poezian libron de juna aûtoro. Mi legis la unuajn paĝojn starante kaj fine acxis la libron. Ekster la butiko la pluvo ankoraux falis, do mi atendis sub la tegmento kaj rigardis la homojn kun ombreloj.
+
+Poste mi promenadis al la merkato. Tie la vendistoj lauxte kriis pri siaj legomoj kaj fruktoj. Mi acxis pomojn, du panojn kaj grandan sakon da terpomoj. La terpomoj venis de bieno ekster la urbo kaj estis tre puraj. La vendisto diris, ke ili estas la plej bonaj de la monato. Mi ne scias, cxu tio estas vera, sed ili ardis bone.
+
+Hejme mi kuiris supon kun la terpomoj kaj karotoj. La odoro plenigis la kuxxujon kaj la kuxxjon. Dum la supo kuiris, mi legis la novan poemlibron. Iuj poemoj estas mallongaj, nur tri linioj; aliaj longaj kiel leteroj. Mi legis duone kaj pensis pri mia propra vivo.
+
+Vespere mi telefonis al mia amikino Anna. SXi rakontis pri sia nova laboro kaj pri sia kato, kiu dormas sur la libroj. Ni ridis multe. SXi proponis, ke ni kune vizitu la muzeon dimanĉe. Mi konsentis kun placxero. Post la telefono mi finis la supon; gxi estis tre bongusta.
+
+Ekstere la pluvo denove komencis, delikate sur la tegmentoj. Mi fermis la librojn, malfermis la fenestron iomete kaj auskultis. Malgranda vento venis en la cambron. Mi pensis: la tago ne estis speciala, sed tiaj tagoj estas la plej bonaj: libro, pluvo, supo kaj telefono al amiko.$$, 'Linguarium demonstration content (project team)', NULL, 'unspecified (demo)', 'community', 'Original demonstration text written for this project. Everyday Esperanto narrative with food, books and weather vocabulary.', 'daily-life')
+ON CONFLICT (language_code, title) DO NOTHING;
+
+UPDATE knowledge.shared_texts SET
+  body = $$tenpo suno ni la, mi moku e pan. mi pilin pona. mi lukin e ma. ma li jaki ala. ma li pona.
+
+mi tawa tomo sona. tomo sona la, mi kama sona e toki. toki ni li ike lili tawa mi. mi jan lili. jan lili li ken sona ala e toki ale.
+
+tenpo pini lili la, mi tawa tomo moku. tomo moku la, mi moku e kili loje li kili laso. telo moku mi li kili loje. telo ni li pilin pona tawa mi.
+
+mi pali e ijo kepeken luka mi. ijo li lili li walo. mi pali e ona mute. tenpo mute la, mi pali e ijo suli. jan esun li toki: "o pana e ijo ni tawa mi." mi pana. jan esun li pana e mani tawa mi. mi pilin pona.
+
+mun la, mi kama tawa tomo mi. jan pona mi li kama tawa tomo mi. mi mute li moku e kili e pan li toki pona. mi kama sona e ijo sin. jan pona mi li pana e sona tawa mi. mi pana e sona tawa jan pona mi. ni li pona tawa mi.
+
+mi pilin ike lili. mi pilin e ni: mi wile pali e ijo suli. mi wile sona e toki mute. mi wile tawa ma sin. taso tenpo suno ale li kama. mi ken pali e ijo mute lon tenpo kama.
+
+tenpo mun pimeja la, mi lape. mi pilin pona. tenpo suno sin li ken pona.$$,
+  source_ref = 'Original demonstration text written for this project using core vocabulary only. Longer everyday narrative with common phrases.',
+  provenance = 'community'
+WHERE language_code = 'tok' AND title = 'tenpo suno pi mi (demonstration text)';
+
+UPDATE knowledge.shared_texts SET
+  body = $$tenpo pini la, jan wan li jo e kala lili tu. kala lili li lon poki telo. jan li moku e kala suli taso. kala lili li ken ala moku e jan. taso jan li moku ala e kala lili.
+
+jan li toki tawa kala: "mi awen e sina. sina kama suli la, mi moku e sina." tenpo suno mute li tawa. kala lili li kama suli.
+
+tenpo wan la, jan li kama tawa poki telo. kala li suli. jan li lukin e kala. jan li pilin: "kala ni li suli. mi wile moku e ona." taso tenpo mute la, kala li pona tawa jan. jan li pilin pona tawa kala kin.
+
+jan li moku ala e kala. jan li pana e moku tawa kala ale. kala ale li suli li pona. ni li pona tawa jan ale.
+
+tenpo suno sin la, jan li tawa ma tomo. jan li toki e ni tawa jan ante: "kala mi li suli. kala mi li pona." jan ante li toki: "mi wile lukin e kala sina." jan ale li kama tawa tomo jan. jan ale li lukin e kala. kala li lon telo suli kin. kala li tawa lon telo. jan ale li pilin pona.
+
+jan wan li toki: "sina jo e kala. sina jo e poki telo. sina jo e telo. sina pona." jan li pilin pona. kala kin li pilin pona.
+
+ni li suli: ijo lili li ken kama suli. jan li ken pona tawa ijo. ijo li ken pona tawa jan. tenpo li pana e suli. tenpo li pana e pona.$$,
+  source_ref = 'Original demonstration text written for this project using core vocabulary only. Longer story form.',
+  provenance = 'community'
+WHERE language_code = 'tok' AND title = 'kala lili (the little fish)';

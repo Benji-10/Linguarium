@@ -10,8 +10,9 @@
  *   - paste a text (keep its source information: author, URL, license)
  *   - upload .txt / .html / .epub (parsed in the browser, ruby-aware)
  *   - import from a URL (fetched server-side, previewed, you confirm metadata)
- *   - the open library: Project Gutenberg, Wikisource, Wikipedia, Wikinews
- *     and curated news feeds - searched by API in the active language
+ *   - the open library: per-language sources - Aozora Bunko for Japanese,
+ *     Project Gutenberg where it stocks books, Wikisource / Wikipedia /
+ *     Wikibooks / Wikinews and curated news feeds elsewhere
  *   - AI-generated texts (Gemini, optional, provenance 'ai')
  * Provenance is a first-class concern: real content keeps its attribution,
  * adaptations keep the original work's information, AI content says so.
@@ -174,7 +175,7 @@ const TABS = [
   { id: 'paste', label: 'Paste', hint: 'Text you have on hand - keep its source details.' },
   { id: 'upload', label: 'Upload', hint: 'A .txt, .html or .epub file from your device.' },
   { id: 'url', label: 'URL', hint: 'An article or story on the web, fetched for you.' },
-  { id: 'library', label: 'Open library', hint: 'Project Gutenberg, Wikisource, Wikipedia, Wikinews, news feeds.' },
+  { id: 'library', label: 'Open library', hint: 'Free sources for your language: Aozora for Japanese, Gutenberg where it stocks books, the wiki family anywhere.' },
   { id: 'ai', label: 'Generate (AI)', hint: 'A new text written for you by the optional AI.' },
 ];
 
@@ -444,26 +445,41 @@ function renderUrlTab(panel, modalRef, languageCode) {
 
 // ---- Open library tab ----------------------------------------------------------
 
-const LIBRARY_PROVIDERS = [
-  { id: 'gutenberg', label: 'Project Gutenberg', license: 'public domain' },
-  { id: 'wikisource', label: 'Wikisource', license: 'varies per work' },
-  { id: 'wikipedia', label: 'Wikipedia', license: 'CC BY-SA' },
-  { id: 'wikinews', label: 'Wikinews', license: 'CC BY 2.5' },
-  { id: 'news', label: 'News feeds', license: 'check the article' },
+// Offline fallback only (the API normally serves the real per-language list).
+const LIBRARY_PROVIDERS_FALLBACK = [
+  { id: 'wikisource', label: 'Wikisource', blurb: 'source texts (license varies per work)' },
+  { id: 'wikipedia', label: 'Wikipedia', blurb: 'articles (CC BY-SA)' },
 ];
+
+const PROVIDER_CACHE = { lang: null, data: null };
+
+/** The sources that serve this language, in recommended order - fetched from
+ *  /api/catalog (server-verified per language: Aozora leads for Japanese,
+ *  Gutenberg only where a shelf exists, Korean gets the wiki family...).
+ *  Falls back to a static pair when offline. */
+async function providersFor(languageCode) {
+  if (PROVIDER_CACHE.lang === languageCode) return PROVIDER_CACHE.data;
+  try {
+    const data = await api('/api/catalog', { params: { language: languageCode } });
+    const providers = (data.providers ?? []).sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
+    PROVIDER_CACHE.lang = languageCode;
+    PROVIDER_CACHE.data = providers;
+    return providers;
+  } catch {
+    return LIBRARY_PROVIDERS_FALLBACK.map((p) => ({ ...p, available: true }));
+  }
+}
 
 function renderLibraryTab(panel, modalRef, languageCode) {
   panel.innerHTML = `
     <div class="stack">
       <div class="library-controls">
-        <select id="l-provider" aria-label="Source">
-          ${LIBRARY_PROVIDERS.map((p) => `<option value="${p.id}">${esc(p.label)} - ${esc(p.license)}</option>`).join('')}
-        </select>
+        <select id="l-provider" aria-label="Source"><option value="">Loading sources...</option></select>
         <input id="l-query" maxlength="200" placeholder="Search (title, topic, author...) - leave empty to browse the language shelf">
         <button class="btn primary small" id="l-search">${icon('compass')}Search</button>
       </div>
-      <p class="muted small" id="l-note">Free, keyless sources in your active language only - importing keeps the source's license and attribution.</p>
-      <div id="l-results"></div>
+      <p class="muted small" id="l-note">Free, keyless sources that serve your active language - importing keeps the source's license and attribution.</p>
+      <div id="l-results">${spinner('Loading the source list')}</div>
     </div>`;
   const el = (id) => panel.querySelector(`#${id}`);
   const results = el('l-results');
@@ -496,6 +512,7 @@ function renderLibraryTab(panel, modalRef, languageCode) {
 
   const search = async (page = 1) => {
     const provider = el('l-provider').value;
+    if (!provider) return;
     const q = el('l-query').value.trim();
     currentPage = page;
     results.innerHTML = `${spinner(page > 1 ? 'Loading page ' + page : 'Searching')}`;
@@ -503,7 +520,7 @@ function renderLibraryTab(panel, modalRef, languageCode) {
       const data = await api('/api/catalog', { params: { provider, language: languageCode, q, page } });
       el('l-note').textContent =
         data.note ??
-        (data.failed_feeds?.length ? `Feed unavailable: ${data.failed_feeds.join(', ')} - try again later.` : "Free, keyless sources in your active language only - importing keeps the source's license and attribution.");
+        (data.failed_feeds?.length ? `Feed unavailable: ${data.failed_feeds.join(', ')} - try again later.` : "Free, keyless sources that serve your active language - importing keeps the source's license and attribution.");
       if ((data.items ?? []).length === 0) {
         results.innerHTML =
           '<p class="muted small">No results. Try another provider or another search - the open sources are unevenly stocked per language.</p>';
@@ -557,9 +574,33 @@ function renderLibraryTab(panel, modalRef, languageCode) {
   el('l-query').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') search(1);
   });
-  // Opening the tab browses the language shelf immediately (the fast route
-  // per provider); failures above render a retry instead of raw errors.
-  search(1);
+
+  // The provider select reflects what actually serves this language: the
+  // recommended source comes first (Aozora for Japanese, Gutenberg where a
+  // shelf exists, the wiki family otherwise); sources that do not stock the
+  // language stay listed but disabled with the reason in their label.
+  const populateProviders = async () => {
+    const providers = await providersFor(languageCode);
+    const select = el('l-provider');
+    const available = providers.filter((p) => p.available !== false);
+    const unavailable = providers.filter((p) => p.available === false);
+    select.innerHTML =
+      available.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('') +
+      (unavailable.length
+        ? unavailable.map((p) => `<option value="" disabled>${esc(p.label)} - no shelf for this language</option>`).join('')
+        : '');
+    if (available.length === 0) {
+      results.innerHTML =
+        '<p class="muted small">No open source is registered for this language yet - paste a text, upload a file or import from a URL meanwhile.</p>';
+      return;
+    }
+    // Opening the tab browses the language shelf immediately (the fast route
+    // per provider); failures above render a retry instead of raw errors.
+    search(1);
+  };
+  populateProviders().catch(() => {
+    results.innerHTML = '<p class="muted small">The source list is unavailable offline - use Paste or Upload instead.</p>';
+  });
 }
 
 // ---- AI generate tab -----------------------------------------------------------

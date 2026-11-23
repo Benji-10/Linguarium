@@ -5,8 +5,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { deflateRawSync } from 'node:zlib';
 import {
   ssrfSafeUrl,
+  safeFetch,
   htmlToText,
   htmlTitle,
   mapWiktionaryDefinitions,
@@ -20,6 +22,19 @@ import {
   GUTENDEX_SEARCH_URL,
   GUTENBERG_TEXT_URLS,
   gutendexPageInfo,
+  providersForLanguage,
+  GUTENBERG_LANGUAGES,
+  WIKISOURCE_LANGUAGES,
+  APP_LANGUAGES,
+  MW_HOST,
+  MW_SEARCH_URL,
+  aozoraCatalogItems,
+  aozoraByRef,
+  AOZORA_REF,
+  aozoraTxtToPlain,
+  aozoraHtmlToText,
+  aozoraUrls,
+  unzipFirstEntry,
 } from '../netlify/functions/lib/sources.mjs';
 
 test('ssrf guard blocks private and odd targets', () => {
@@ -187,4 +202,144 @@ test('gutenberg text candidates put the reliable mirror first', () => {
   assert.equal(urls[0], 'https://gutenberg.pglaf.org/cache/epub/1342/pg1342.txt');
   assert.ok(urls.includes('https://www.gutenberg.org/cache/epub/1342/pg1342.txt'));
   assert.ok(urls.includes('https://www.gutenberg.org/files/1342/1342-0.txt'));
+});
+
+// ------------------------------------------------------------- new sources tests
+
+test('safeFetch does not crash on responses with a content-length (the 2026-11 maxBytes regression)', async () => {
+  // Regression: safeFetch referenced an undefined `maxBytes` variable, so
+  // EVERY non-redirect response with a content-length header (Gutenberg
+  // mirror book files, RSS feeds...) threw ReferenceError instead of
+  // returning - which surfaced to users as "source responded 503".
+  const realFetch = globalThis.fetch;
+  const body = 'x'.repeat(1000);
+  globalThis.fetch = async () =>
+    new Response(body, {
+      status: 200,
+      headers: { 'content-length': String(body.length), 'content-type': 'text/plain' },
+    });
+  try {
+    const res = await safeFetch('https://example.com/book.txt', { timeoutMs: 5000, maxBytes: 5 * 1024 * 1024 });
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.equal(text.length, body.length);
+    // And the cap still refuses oversized declared bodies.
+    await assert.rejects(
+      () => safeFetch('https://example.com/book.txt', { timeoutMs: 5000, maxBytes: 10 }),
+      /too large/,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('per-language registry: every app language has at least one provider', () => {
+  for (const lang of APP_LANGUAGES) {
+    const list = providersForLanguage(lang);
+    assert.ok(list.length >= 1, `${lang} should have at least one provider`);
+  }
+});
+
+test('per-language registry: gutenberg only where stocked, aozora leads Japanese', () => {
+  // Probed 2026-11: Korean has 1 book (useless shelf), so Gutenberg is not
+  // offered; Japanese leads with Aozora Bunko; the wiki family is everywhere.
+  assert.equal(GUTENBERG_LANGUAGES.includes('ko'), false);
+  assert.equal(GUTENBERG_LANGUAGES.includes('ja'), true);
+  assert.equal(providersForLanguage('ja')[0].id, 'aozora');
+  assert.ok(providersForLanguage('ja').some((p) => p.id === 'gutenberg'));
+  assert.equal(providersForLanguage('ko')[0].id, 'wikisource');
+  assert.equal(providersForLanguage('fr')[0].id, 'gutenberg');
+  assert.equal(providersForLanguage('tok').some((p) => p.id === 'wikipedia'), false);
+});
+
+test('wiki host remap: Norwegian (nb) editions live on the no. subdomain', () => {
+  assert.equal(MW_HOST('wikisource', 'nb'), 'no.wikisource.org');
+  assert.equal(MW_HOST('wikipedia', 'nb'), 'nb.wikipedia.org');
+  assert.equal(MW_HOST('wikinews', 'nb'), 'no.wikinews.org');
+  assert.ok(MW_SEARCH_URL('wikisource', 'nb', 'test').startsWith('https://no.wikisource.org/'));
+  assert.ok(GUTENDEX_BROWSE_URL('nb', 1).includes('languages=no'));
+  const items = mapMediawikiSearch({ query: { search: [{ title: 'Nord' }] } }, 'wikisource', 'nb', 'x');
+  assert.ok(items[0].source_url.startsWith('https://no.wikisource.org/wiki/'));
+});
+
+test('htmlToText: <rp> fallback parentheses do not leak into the ruby base', () => {
+  // Aozora XHTML form: <ruby><rb>或日</rb><rp>（</rp><rt>あるひ</rt><rp>）</rp></ruby>
+  const html = '<p><ruby><rb>或日</rb><rp>（</rp><rt>あるひ</rt><rp>）</rp></ruby>の暮方の事である。</p>';
+  assert.equal(htmlToText(html), '或日（あるひ）の暮方の事である。');
+});
+
+test('aozoraTxtToPlain: ruby 《》 -> parenthetical, legend and footer stripped', () => {
+  const raw = [
+    '羅生門', '芥川竜之介', '',
+    '-------------------------------------------------------',
+    '【テキスト中に現れる記号について】', '',
+    '《》：ルビ', '（例）或日《あるひ》', '',
+    '-------------------------------------------------------',
+    '　或日《あるひ》の暮方の事である。',
+    '　｜羅生門《らしやうもん》の下で雨やみを待つてゐた。',
+  ].join('\n');
+  const out = aozoraTxtToPlain(raw);
+  assert.ok(out.startsWith('或日（あるひ）'), `legend/header should be cut: ${out.slice(0, 30)}`);
+  assert.ok(out.includes('或日（あるひ）の暮方'));
+  assert.ok(out.includes('羅生門（らしやうもん）'));
+  assert.equal(out.includes('テキスト中に現れる記号について'), false);
+});
+
+test('aozoraHtmlToText: main_text extraction + footer cut', () => {
+  const html = [
+    '<html><body><div class="header">岩波文庫</div>',
+    '<div class="main_text"><p>或日<ruby>（<rp>）<rt>あるひ</rt></ruby>の事。</p></div>',
+    '<div class="bibliographical_information">底本：岩波文庫</div></body></html>',
+  ].join('');
+  const out = aozoraHtmlToText(html);
+  assert.ok(out.includes('の事。'));
+  assert.equal(out.includes('底本'), false);
+  assert.equal(out.includes('岩波文庫'), false);
+});
+
+test('aozora catalog: ref roundtrip and search', () => {
+  const items = aozoraCatalogItems('');
+  assert.ok(items.length >= 30, `curated shelf should be substantial (${items.length})`);
+  const cat = aozoraCatalogItems('猫');
+  assert.deepEqual(cat.map((c) => c.title), ['吾輩は猫である']);
+  const work = aozoraByRef(cat[0].ref);
+  assert.equal(work.t, '吾輩は猫である');
+  assert.equal(AOZORA_REF(work), cat[0].ref);
+  assert.equal(aozoraByRef('000000/nonexistent'), null);
+});
+
+test('aozoraUrls builds the three fetch routes from a work', () => {
+  const urls = aozoraUrls({ a: '000879', z: '128_ruby_2046', h: '128_15261', w: '000128' });
+  assert.equal(urls.html, 'https://www.aozora.gr.jp/cards/000879/files/128_15261.html');
+  assert.equal(urls.hack, 'https://aozorahack.org/aozorabunko_text/cards/000879/files/128_ruby_2046/128_ruby_2046.txt');
+  assert.equal(urls.zip, 'https://www.aozora.gr.jp/cards/000879/files/128_ruby_2046.zip');
+  assert.equal(urls.card, 'https://www.aozora.gr.jp/cards/000879/card000128.html');
+});
+
+test('unzipFirstEntry inflates a single-file deflate zip', () => {
+  const content = Buffer.from('或日（あるひ）の暮方の事である。'.repeat(40), 'utf8');
+  const name = Buffer.from('work.txt');
+  const comp = deflateRawSync(content);
+  const local = Buffer.alloc(30 + name.length + comp.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(name.length, 26);
+  local.writeUInt16LE(0, 28);
+  name.copy(local, 30);
+  comp.copy(local, 30 + name.length);
+  const central = Buffer.alloc(46 + name.length);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(8, 10); // deflate
+  central.writeUInt32LE(comp.length, 20);
+  central.writeUInt32LE(0, 42); // local offset
+  central.writeUInt16LE(name.length, 28);
+  name.copy(central, 46);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 8); // 1 entry
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(local.length, 16); // cd offset = after the local entry
+  const zip = Buffer.concat([local, central, eocd]);
+  const out = unzipFirstEntry(zip);
+  assert.equal(out.toString('utf8'), content.toString('utf8'));
+  assert.throws(() => unzipFirstEntry(Buffer.from('not a zip at all')), /not a zip/);
 });

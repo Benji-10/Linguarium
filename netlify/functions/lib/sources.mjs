@@ -3,8 +3,8 @@
  *
  * Everything here is keyless, free, and honestly attributed:
  *   - Project Gutenberg via Gutendex (public-domain books)
- *   - Wikisource / Wikipedia / Wikinews via the standard MediaWiki API
- *     (Wikinews CC BY 2.5; Wikipedia CC BY-SA; Wikisource varies per work)
+ *   - Aozora Bunko for Japanese (curated famous-work shelf, furigana kept)
+ *   - Wikisource / Wikipedia / Wikibooks / Wikinews via the standard MediaWiki API
  *   - a small curated list of stable news RSS feeds
  *   - Wiktionary REST definitions (CC BY-SA) + dictionaryapi.dev (English)
  *
@@ -12,6 +12,8 @@
  * is unit-tested without network access. The fetch helpers carry the SSRF
  * guard every server-side fetch must pass.
  */
+
+import { inflateRawSync } from 'node:zlib';
 
 // ---------------------------------------------------------------- guard
 
@@ -47,6 +49,7 @@ export function ssrfSafeUrl(raw) {
 
 /** Fetch with SSRF validation, redirect cap, size cap and a timeout. */
 export async function safeFetch(rawUrl, opts) {
+  const maxBytes = opts?.maxBytes ?? Infinity;
   let url = ssrfSafeUrl(rawUrl);
   for (let hop = 0; hop <= (opts?.maxRedirects ?? 3); hop += 1) {
     const res = await fetch(url, {
@@ -79,7 +82,7 @@ export async function fetchText(rawUrl, opts) {
 /** Retry a JSON fetch once on transient failures (Cloudflare 403 challenges,
  * 5xx, network aborts). Gutendex sits behind Cloudflare and occasionally
  *  challenges a datacenter request that a second attempt passes. */
-export async function fetchJsonRetry(rawUrl, { attempts = 2, backoffMs = 900, ...opts } = {}) {
+export async function fetchJsonRetry(rawUrl, { attempts = 3, backoffMs = 1200, ...opts } = {}) {
   let lastError = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
@@ -90,7 +93,7 @@ export async function fetchJsonRetry(rawUrl, { attempts = 2, backoffMs = 900, ..
         String(err?.message ?? err),
       );
       if (!transient || attempt === attempts - 1) throw lastError;
-      await new Promise((r) => setTimeout(r, backoffMs));
+      await new Promise((r) => setTimeout(r, backoffMs * (attempt + 1)));
     }
   }
   throw lastError;
@@ -99,9 +102,13 @@ export async function fetchJsonRetry(rawUrl, { attempts = 2, backoffMs = 900, ..
 /** Stream a text body with a BYTE cap and stop early once the cap is reached
  *  (used for Gutenberg books: the reader imports at most the first slice
  *  anyway, so a capped download saves minutes on multi-megabyte books).
+ *  The declared content-length is deliberately NOT enforced here - the
+ *  stream itself is cut at the cap; a whole-book refusal would defeat the
+ *  point (a 754 KB book yields the first 700 KB, which the import cut
+ *  handles honestly with a truncation note).
  *  Returns { text, capped } - `capped` says the source was longer. */
 export async function fetchTextCapped(rawUrl, { timeoutMs = 30000, maxBytes = 700 * 1024 } = {}) {
-  const res = await safeFetch(rawUrl, { timeoutMs, maxBytes });
+  const res = await safeFetch(rawUrl, { timeoutMs });
   if (!res.ok) throw new Error(`source responded ${res.status}`);
   if (!res.body) {
     const text = await res.text();
@@ -166,7 +173,13 @@ export function htmlToText(html) {
   // Preserve ruby readings as parenthetical annotations before stripping tags.
   s = s.replace(/<ruby[^>]*>([\s\S]*?)<\/ruby>/gi, (m, inner) => {
     const parts = [...inner.matchAll(/<rt[^>]*>([\s\S]*?)<\/rt\s*>/gi)].map((x) => x[1]);
-    let base = inner.replace(/<rt[\s\S]*?<\/rt\s*>/gi, '').replace(/<[^>]+>/g, '');
+    // <rp> holds the literal fallback parentheses - they are part of the
+    // rendered annotation, not of the base word (Aozora XHTML uses them on
+    // every ruby element; without this the annotation doubles up).
+    let base = inner
+      .replace(/<rt[\s\S]*?<\/rt\s*>/gi, '')
+      .replace(/<rp[\s\S]*?<\/rp\s*>/gi, '')
+      .replace(/<[^>]+>/g, '');
     base = decodeEntities(base).trim();
     const reading = parts.map((p) => decodeEntities(p).trim()).join('');
     return reading && base ? `${base}（${reading}）` : base;
@@ -298,18 +311,26 @@ export function gutendexPageInfo(json) {
  *  both required - `?languages=ja` alone hangs the upstream for minutes
  *  (reproduced 2026-11), while `/books/?languages=ja&page=1` answers in
  *  ~250 ms. `?search=...` is NOT reliably fast; callers must set a short
- *  timeout and fall back to the language browse when it stalls. */
+ *  timeout and fall back to the language browse when it stalls.
+ *  Gutendex rate-limits bursts hard (also reproduced 2026-11): every call
+ *  goes through a TTL memo cache and the language is gated by
+ *  GUTENBERG_LANGUAGES upstream, because empty shelves HANG instead of
+ *  answering empty. */
+const GUTENDEX_LANG = (lang) => (lang === 'nb' ? 'no' : lang);
+
 export const GUTENDEX_BROWSE_URL = (language, page = 1) => {
   const params = new URLSearchParams();
-  if (language && language !== 'en') params.set('languages', language);
+  const lang = GUTENDEX_LANG(language);
+  if (lang && lang !== 'en') params.set('languages', lang);
   params.set('page', String(Math.min(100, Math.max(1, page || 1))));
   return `https://gutendex.com/books/?${params.toString()}`;
 };
 
 export const GUTENDEX_SEARCH_URL = (q, language, page = 1) => {
   const params = new URLSearchParams();
+  const lang = GUTENDEX_LANG(language);
   if (q && q.trim()) params.set('search', q.trim().slice(0, 200));
-  if (language && language !== 'en') params.set('languages', language);
+  if (lang && lang !== 'en') params.set('languages', lang);
   params.set('page', String(Math.min(100, Math.max(1, page || 1))));
   return `https://gutendex.com/books/?${params.toString()}`;
 };
@@ -328,6 +349,12 @@ export const GUTENBERG_TEXT_URLS = (id) => [
 
 // ---------------------------------------------------------------- mediawiki
 
+/** Norwegian (bokmål) wiki editions live on the 'no' subdomain, the app
+ *  language code is 'nb'. Wikipedia itself DOES use nb - hence the
+ *  wikipedia-only exclusion below. */
+const WIKI_HOST_LANG = (lang) => (lang === 'nb' ? 'no' : lang);
+export const MW_HOST = (project, lang) => `${project === 'wikipedia' ? lang : WIKI_HOST_LANG(lang)}.${project}.org`;
+
 export const MW_SEARCH_URL = (project, lang, q) => {
   const params = new URLSearchParams({
     action: 'query',
@@ -336,7 +363,7 @@ export const MW_SEARCH_URL = (project, lang, q) => {
     srlimit: '20',
     format: 'json',
   });
-  return `https://${lang}.${project}.org/w/api.php?${params.toString()}`;
+  return `https://${MW_HOST(project, lang)}/w/api.php?${params.toString()}`;
 };
 
 /** Map a MediaWiki list=search response to catalog items. */
@@ -348,7 +375,7 @@ export function mapMediawikiSearch(json, project, lang, license) {
     title: String(h.title).slice(0, 300),
     author: project === 'wikipedia' ? 'Wikipedia contributors' : null,
     language: lang,
-    source_url: `https://${lang}.${project}.org/wiki/${encodeURIComponent(String(h.title).replace(/ /g, '_'))}`,
+    source_url: `https://${MW_HOST(project, lang)}/wiki/${encodeURIComponent(String(h.title).replace(/ /g, '_'))}`,
     license,
     description: typeof h?.snippet === 'string' ? h.snippet.replace(/<[^>]+>/g, '').slice(0, 200) : null,
   }));
@@ -362,7 +389,7 @@ export const MW_EXTRACT_URL = (project, lang, title) => {
     titles: title.slice(0, 300),
     format: 'json',
   });
-  return `https://${lang}.${project}.org/w/api.php?${params.toString()}`;
+  return `https://${MW_HOST(project, lang)}/w/api.php?${params.toString()}`;
 };
 
 export const MW_PARSE_URL = (project, lang, title) => {
@@ -372,7 +399,7 @@ export const MW_PARSE_URL = (project, lang, title) => {
     prop: 'text',
     format: 'json',
   });
-  return `https://${lang}.${project}.org/w/api.php?${params.toString()}`;
+  return `https://${MW_HOST(project, lang)}/w/api.php?${params.toString()}`;
 };
 
 /** Extract the plaintext from an action=query&prop=extracts response. */
@@ -445,27 +472,333 @@ export const NEWS_FEEDS = [
   { language: 'es', name: 'Deutsche Welle (Español)', url: 'https://rss.dw.com/xml/rss-es-all' },
 ];
 
+// ---------------------------------------------------------------- per-language registry
+//
+// Which source actually serves which language. Researched and live-verified
+// 2026-11: Gutendex per-language counts probed directly (languages with 0
+// books HANG the upstream for minutes, so Gutenberg is only OFFERED where a
+// shelf exists); Wikisource editions from the wikisource.org portal list;
+// Wikinews/Wikibooks from the Wikimedia project lists. Japanese gets Aozora
+// Bunko as its primary source (Gutenberg's ja shelf is tiny; Aozora is the
+// canonical Japanese free library). Korean has no big keyless corpus - the
+// wiki family (Wikisource/Wikipedia/Wikibooks/Wikinews) is what exists.
+
+/** Gutendex/Gutenberg languages with a real shelf (probe 2026-11; 'nb' maps
+ *  to 'no'). Deliberately excludes single-book shelves like Korean. */
+export const GUTENBERG_LANGUAGES = [
+  'en', 'fr', 'es', 'pt', 'it', 'ca', 'de', 'nl', 'sv', 'da', 'nb', 'fi', 'is', 'pl',
+  'cs', 'hu', 'ro', 'bg', 'ru', 'el', 'la', 'eo', 'cy', 'ga', 'af', 'tl', 'he', 'zh', 'ja',
+];
+
+/** Languages with their own Wikisource edition (per the wikisource.org portal,
+ *  2026-11): effectively every language this app ships. */
+export const WIKISOURCE_LANGUAGES = [
+  'en', 'fr', 'es', 'pt', 'it', 'ca', 'de', 'nl', 'sv', 'da', 'nb', 'fi', 'is', 'pl', 'cs',
+  'sk', 'hu', 'ro', 'bg', 'ru', 'uk', 'el', 'la', 'eo', 'tr', 'sq', 'lt', 'lv', 'et', 'cy',
+  'ga', 'haw', 'af', 'id', 'ms', 'tl', 'sw', 'vi', 'ar', 'he', 'fa', 'ur', 'ps', 'hi', 'bn',
+  'ta', 'te', 'kn', 'ml', 'th', 'lo', 'km', 'my', 'zh', 'ja', 'ko', 'tok',
+];
+
+/** Languages with a Wikinews edition (2026-11 project list). */
+export const WIKINEWS_LANGUAGES = [
+  'en', 'fr', 'es', 'pt', 'it', 'ca', 'de', 'nl', 'sv', 'nb', 'fi', 'pl', 'cs', 'ru', 'uk',
+  'el', 'eo', 'tr', 'sq', 'ar', 'he', 'fa', 'zh', 'ja', 'ko', 'th', 'hu', 'ro', 'bg',
+];
+
+/** Languages with a Wikibooks edition (2026-11 project list). */
+export const WIKIBOOKS_LANGUAGES = [
+  'en', 'fr', 'es', 'pt', 'it', 'ca', 'de', 'nl', 'sv', 'da', 'nb', 'fi', 'is', 'pl', 'cs',
+  'sk', 'hu', 'ro', 'bg', 'ru', 'uk', 'el', 'la', 'eo', 'tr', 'sq', 'lt', 'lv', 'et', 'cy',
+  'ga', 'af', 'id', 'ms', 'tl', 'vi', 'ar', 'he', 'fa', 'ur', 'ps', 'hi', 'bn', 'ta', 'te',
+  'kn', 'ml', 'th', 'zh', 'ja', 'ko',
+];
+
+/** Languages with a Wikipedia edition - every app language except Toki Pona
+ *  (its Wikipedia was closed in 2005; texts in Toki Pona exist on Wikisource). */
+export const WIKIPEDIA_LANGUAGES = [
+  'en', 'fr', 'es', 'pt', 'it', 'ca', 'de', 'nl', 'sv', 'da', 'nb', 'fi', 'is', 'pl', 'cs',
+  'sk', 'hu', 'ro', 'bg', 'ru', 'uk', 'el', 'la', 'eo', 'tr', 'sq', 'lt', 'lv', 'et', 'cy',
+  'ga', 'haw', 'af', 'id', 'ms', 'tl', 'sw', 'vi', 'ar', 'he', 'fa', 'ur', 'ps', 'hi', 'bn',
+  'ta', 'te', 'kn', 'ml', 'th', 'lo', 'km', 'my', 'zh', 'ja', 'ko',
+];
+
+/** The app's 56 languages (from the seed), used to sanity-check the registry. */
+export const APP_LANGUAGES = [
+  ...WIKISOURCE_LANGUAGES, 'tok',
+];
+
+// ---------------------------------------------------------------- aozora bunko
+
+/**
+ * Aozora Bunko (青空文庫): the canonical Japanese free library. There is no
+ * keyless search API, so this is a curated shelf of 38 famous public-domain
+ * works, built from the official list_person_all_extended_utf8.csv index
+ * (downloaded 2026-11; every URL below is taken verbatim from it).
+ * Fields: a=author directory, au=author, t=title, z=zip text file (without
+ * .zip), h=HTML file (without .html), w=Aozora work id.
+ */
+export const AOZORA_WORKS = [
+  { a: '000885', au: '与謝野晶子', t: 'みだれ髪', z: '51307_ruby_47032', h: '51307_47033', w: '051307' },
+  { a: '000119', au: '中島敦', t: '山月記', z: '624_ruby_5668', h: '624_14544', w: '000624' },
+  { a: '000038', au: '国木田独歩', t: '武蔵野', z: '329_ruby_5709', h: '329_15886', w: '000329' },
+  { a: '001030', au: '堀辰雄', t: '風立ちぬ', z: '4803_ruby_14149', h: '4803_14204', w: '004803' },
+  { a: '000148', au: '夏目漱石', t: '坊っちゃん', z: '752_ruby_2438', h: '752_14964', w: '000752' },
+  { a: '000148', au: '夏目漱石', t: 'こころ', z: '773_ruby_5968', h: '773_14560', w: '000773' },
+  { a: '000148', au: '夏目漱石', t: '草枕', z: '776_ruby_6020', h: '776_14941', w: '000776' },
+  { a: '000148', au: '夏目漱石', t: '吾輩は猫である', z: '789_ruby_5639', h: '789_14547', w: '000789' },
+  { a: '000035', au: '太宰治', t: '走れメロス', z: '1567_ruby_4948', h: '1567_14913', w: '001567' },
+  { a: '000035', au: '太宰治', t: 'ヴィヨンの妻', z: '2253_ruby_1031', h: '2253_14908', w: '002253' },
+  { a: '000035', au: '太宰治', t: '富嶽百景', z: '270_ruby_1164', h: '270_14914', w: '000270' },
+  { a: '000081', au: '宮沢賢治', t: '注文の多い料理店', z: '43754_ruby_17594', h: '43754_17659', w: '043754' },
+  { a: '000081', au: '宮沢賢治', t: 'よだかの星', z: '473_ruby_467', h: '473_42318', w: '000473' },
+  { a: '000081', au: '宮沢賢治', t: '銀河鉄道の夜', z: '48222_ruby_59603', h: '48222_59645', w: '048222' },
+  { a: '000158', au: '島崎藤村', t: '千曲川のスケッチ', z: '1503_ruby_6001', h: '1503_14594', w: '001503' },
+  { a: '000121', au: '新美南吉', t: 'ごん狐', z: '628_ruby_649', h: '628_14895', w: '000628' },
+  { a: '000025', au: '有島武郎', t: '一房の葡萄', z: '211_ruby_20471', h: '211_20472', w: '000211' },
+  { a: '000074', au: '梶井基次郎', t: '檸檬', z: '46349_ruby_23599', h: '46349_23843', w: '046349' },
+  { a: '000129', au: '森鴎外', t: '舞姫', z: '58126_ruby_73643', h: '58126_73682', w: '058126' },
+  { a: '000329', au: '楠山正雄', t: '猿かに合戦', z: '18334_ruby_11929', h: '18334_11947', w: '018334' },
+  { a: '000329', au: '楠山正雄', t: '桃太郎', z: '18376_ruby_12074', h: '18376_12100', w: '018376' },
+  { a: '000329', au: '楠山正雄', t: 'かちかち山', z: '18377_ruby_11923', h: '18377_11982', w: '018377' },
+  { a: '000329', au: '楠山正雄', t: '浦島太郎', z: '3390_ruby_6090', h: '3390_33153', w: '003390' },
+  { a: '000329', au: '楠山正雄', t: '花咲かじじい', z: '3391_ruby', h: '3391', w: '003391' },
+  { a: '001091', au: '楠山正雄', t: '赤ずきんちゃん', z: '42311_ruby_15515', h: '42311_15546', w: '042311' },
+  { a: '001091', au: '楠山正雄', t: 'ブレーメンの町楽隊', z: '42314_ruby_15798', h: '42314_15929', w: '042314' },
+  { a: '001091', au: '楠山正雄', t: 'ヘンゼルとグレーテル', z: '42315_ruby_15799', h: '42315_15931', w: '042315' },
+  { a: '000019', au: '楠山正雄', t: '雪の女王', z: '42387_ruby_20531', h: '42387_20568', w: '042387' },
+  { a: '000329', au: '楠山正雄', t: 'ジャックと豆の木', z: '43124_ruby_20869', h: '43124_21541', w: '043124' },
+  { a: '000329', au: '楠山正雄', t: '一寸法師', z: '43457_ruby_23696', h: '43457_23938', w: '043457' },
+  { a: '000050', au: '泉鏡花', t: '高野聖', z: '43466_ruby_25777', h: '43466_26099', w: '043466' },
+  { a: '000050', au: '泉鏡花', t: '夜行巡査', z: '897_ruby_20741', h: '897_20742', w: '000897' },
+  { a: '000153', au: '石川啄木', t: '一握の砂', z: '816_ruby_5621', h: '816_15786', w: '000816' },
+  { a: '000879', au: '芥川竜之介', t: '羅生門', z: '128_ruby_2046', h: '128_15261', w: '000128' },
+  { a: '000879', au: '芥川竜之介', t: '藪の中', z: '24454_ruby_46815', h: '24454_47036', w: '024454' },
+  { a: '000879', au: '芥川竜之介', t: '鼻', z: '42_ruby_154', h: '42_15228', w: '000042' },
+  { a: '000879', au: '芥川竜之介', t: '地獄変', z: '61_ruby_2706', h: '61_15130', w: '000061' },
+  { a: '000879', au: '芥川竜之介', t: '蜘蛛の糸', z: '92_ruby_164', h: '92_14545', w: '000092' },
+];
+
+/** URL forms for an Aozora work, in try order:
+ *  1. the official HTML edition (Shift-JIS, carries <ruby> furigana which
+ *     survives as parenthetical annotations),
+ *  2. the aozorahack.org unzipped-text mirror (Shift-JIS plain text),
+ *  3. the official .zip of the plain text. */
+export function aozoraUrls(work) {
+  const dir = `cards/${work.a}/files`;
+  return {
+    html: `https://www.aozora.gr.jp/${dir}/${work.h}.html`,
+    hack: `https://aozorahack.org/aozorabunko_text/${dir}/${work.z}/${work.z}.txt`,
+    zip: `https://www.aozora.gr.jp/${dir}/${work.z}.zip`,
+    card: `https://www.aozora.gr.jp/cards/${work.a}/card${work.w}.html`,
+  };
+}
+
+/** ref form used by the catalog/import API: `${a}/${z}`. */
+export const AOZORA_REF = (work) => `${work.a}/${work.z}`;
+export const aozoraByRef = (ref) =>
+  AOZORA_WORKS.find((w) => AOZORA_REF(w) === ref) ?? null;
+
+/** Curated shelf as catalog items (pure; search filters it client-side of
+ *  the network entirely). */
+export function aozoraCatalogItems(query) {
+  const q = String(query ?? '').trim().toLowerCase();
+  return AOZORA_WORKS.filter(
+    (w) =>
+      !q ||
+      w.t.toLowerCase().includes(q) ||
+      w.au.toLowerCase().includes(q),
+  ).map((w) => ({
+    provider: 'aozora',
+    ref: AOZORA_REF(w),
+    title: w.t,
+    author: w.au,
+    language: 'ja',
+    source_url: aozoraUrls(w).card,
+    license: 'public-domain (per Aozora Bunko handling rules; each work page is authoritative)',
+    description: null,
+  }));
+}
+
+/** Minimal single-file zip reader (Aozora zips hold exactly one .txt).
+ *  Parses the end-of-central-directory record, walks to the first central
+ *  directory entry, then inflates the local entry - no dependency needed. */
+export function unzipFirstEntry(buf) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0; i -= 1) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error('not a zip archive');
+  const cdOffset = buf.readUInt32LE(eocd + 16);
+  if (buf.readUInt32LE(cdOffset) !== 0x02014b50) throw new Error('corrupt zip directory');
+  const compression = buf.readUInt16LE(cdOffset + 10);
+  const compSize = buf.readUInt32LE(cdOffset + 20);
+  const localOffset = buf.readUInt32LE(cdOffset + 42);
+  const nameLen = buf.readUInt16LE(localOffset + 26);
+  const extraLen = buf.readUInt16LE(localOffset + 28);
+  const dataStart = localOffset + 30 + nameLen + extraLen;
+  const data = buf.subarray(dataStart, dataStart + compSize);
+  return compression === 8 ? inflateRawSync(data) : data;
+}
+
+/** Aozora plain-text (.txt from zip or mirror) -> reading text.
+ *  Converts the 《reading》 ruby notation to the parenthetical annotation
+ *  form the reader understands, drops the ｜ ruby-anchor markers and the
+ *  symbol-legend / bibliographic header and footer lines. */
+export function aozoraTxtToPlain(raw) {
+  let s = String(raw ?? '');
+  s = s.replace(/｜(?=[^\n])/g, '');
+  s = s.replace(/([^\n「」（）])《([^《》\n]+)》/g, '$1（$2）');
+  // The header block (title/author, then a ------- delimited symbol legend)
+  // ends at the last separator line near the top; the work itself starts
+  // right after it. Files without the legend keep everything.
+  const lines = s.split(/\r?\n/);
+  const separators = [];
+  for (let i = 0; i < Math.min(40, lines.length); i += 1) {
+    if (/^[-]{10,}$/.test(lines[i].trim())) separators.push(i);
+  }
+  const cut = separators.length >= 2 ? separators[separators.length - 1] + 1 : 0;
+  const legend = [
+    /^[-]{10,}$/,
+    /^【テキスト中に現れる記号について】/,
+    /^《》：?ルビ/,
+    /^（例）/,
+    /^［＃.{0,120}］/,
+    /^＃[^：]{0,10}：/,
+    /^底本[:：]/,
+    /^入力[:：]/,
+    /^校正[:：]/,
+    /^［＃底本/,
+  ];
+  s = lines
+    .slice(cut)
+    .filter((line) => !legend.some((re) => re.test(line.trim())))
+    .map((line) => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return s;
+}
+
+/** Aozora HTML edition -> reading text. Extracts the main_text div (standard
+ *  Aozora layout; greedy match because it may contain nested divs), lets
+ *  htmlToText turn <ruby> into parenthetical furigana annotations, then cuts
+ *  the bibliographic footer that follows the work text. */
+export function aozoraHtmlToText(html) {
+  const s = String(html ?? '');
+  const m = s.match(/<div[^>]*class="main_text"[^>]*>([\s\S]*)<\/div>/i);
+  let text = htmlToText(m ? m[1] : s);
+  const footer = text.search(/^底本[:：]/m);
+  if (footer > 0) text = text.slice(0, footer);
+  return text.trim();
+}
+
+/** Fetch an Aozora work's text: HTML first (furigana preserved), then the
+ *  plain-text mirror, then the official zip. All routes are Shift-JIS.
+ *  Returns { text, route } . */
+export async function fetchAozoraText(work, fetchers = {}) {
+  const urls = aozoraUrls(work);
+  const fetchBytes = fetchers.fetchBytes ?? defaultFetchBytes;
+  const attempts = [
+    { route: 'html', url: urls.html, decode: aozoraHtmlToText, timeoutMs: 20000 },
+    { route: 'txt', url: urls.hack, decode: aozoraTxtToPlain, timeoutMs: 15000 },
+    { route: 'zip', url: urls.zip, decode: (buf) => aozoraTxtToPlain(unzipFirstEntry(buf)), timeoutMs: 20000 },
+  ];
+  let lastError = null;
+  for (const att of attempts) {
+    try {
+      const buf = await fetchBytes(att.url, att.timeoutMs);
+      const decoded = new TextDecoder('shift_jis').decode(buf);
+      const text = att.decode(decoded);
+      if (text && text.trim().length > 200) return { text, route: att.route };
+      lastError = new Error('no usable text from ' + att.route);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError ?? new Error('aozora fetch failed');
+}
+
+async function defaultFetchBytes(url, timeoutMs) {
+  const res = await safeFetch(url, { timeoutMs, maxBytes: 2 * 1024 * 1024 });
+  if (!res.ok) throw new Error(`source responded ${res.status}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
 // ---------------------------------------------------------------- provider meta
 
 export const PROVIDERS = {
+  aozora: {
+    label: 'Aozora Bunko (青空文庫)',
+    blurb: 'The canonical Japanese free library - a curated shelf of famous public-domain works, furigana included.',
+    languages: ['ja'],
+    priority: 0,
+  },
   gutenberg: {
     label: 'Project Gutenberg',
     blurb: 'Public-domain books in many languages (via the Gutendex catalogue).',
+    languages: GUTENBERG_LANGUAGES,
+    priority: 1,
   },
   wikisource: {
     label: 'Wikisource',
     blurb: 'Public-domain and freely licensed source texts (license varies per work - check its page).',
+    languages: WIKISOURCE_LANGUAGES,
+    priority: 2,
   },
   wikipedia: {
     label: 'Wikipedia',
     blurb: 'Encyclopedia articles (CC BY-SA; attribution to the contributors).',
+    languages: WIKIPEDIA_LANGUAGES,
+    priority: 3,
+  },
+  wikibooks: {
+    label: 'Wikibooks',
+    blurb: 'Open textbooks and manuals - structured learning material (CC BY-SA; attribution to the contributors).',
+    languages: WIKIBOOKS_LANGUAGES,
+    priority: 4,
   },
   wikinews: {
     label: 'Wikinews',
     blurb: 'Community news reports in many languages (CC BY 2.5).',
+    languages: WIKINEWS_LANGUAGES,
+    priority: 5,
   },
   news: {
     label: 'News feeds',
     blurb: 'Curated stable RSS feeds (BBC, DW, France 24). Article pages are the licensing authority.',
+    languages: ['en', 'de', 'fr', 'es'],
+    priority: 6,
   },
 };
+
+/** Providers that serve a language, in recommended order. */
+export function providersForLanguage(language) {
+  return Object.entries(PROVIDERS)
+    .filter(([, meta]) => (meta.languages ?? []).includes(language))
+    .map(([id, meta]) => ({ id, ...meta, languages: undefined }))
+    .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
+}
+
+// ---------------------------------------------------------------- memo cache
+
+/**
+ * Tiny TTL memo cache for the catalog: Netlify function instances are reused
+ * across requests, so a hot language shelf answers instantly instead of
+ * hammering rate-limited upstreams (Gutendex throttles bursts; probed 2026-11).
+ */
+const MEMO = new Map();
+export async function memoJson(key, ttlMs, fetcher) {
+  const hit = MEMO.get(key);
+  if (hit && hit.expires > Date.now()) return hit.value;
+  const value = await fetcher();
+  MEMO.set(key, { value, expires: Date.now() + ttlMs });
+  if (MEMO.size > 200) {
+    for (const [k, v] of MEMO) {
+      if (v.expires < Date.now()) MEMO.delete(k);
+    }
+  }
+  return value;
+}
