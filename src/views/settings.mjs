@@ -61,10 +61,12 @@ export async function renderSettings(container) {
         <p class="muted small">A full, portable backup: entries, FSRS states, review history, collections and texts - one documented JSON file (docs/OFFLINE-AND-SYNC.md).</p>
         <div class="sync-row">
           <button class="btn" id="s-export">${icon('download')}Export backup</button>
+          <button class="btn subtle" id="s-import">${icon('upload')}Import backup</button>
+          <input type="file" id="s-import-file" accept="application/json,.json" hidden>
           <button class="btn subtle danger" id="s-purge-data">Delete all my learning data</button>
           <button class="btn subtle danger" id="s-delete-account">Delete my account</button>
         </div>
-        <p class="muted small">Deletion is two-step (type DELETE to confirm) and only touches your own rows.</p>
+        <p class="muted small">Import merges: unknown entries, collections and texts are restored; anything that already exists here keeps its CURRENT state (nothing newer is overwritten, skipped items are reported). Review history stays append-only and is not re-imported. Deletion is two-step (type DELETE to confirm) and only touches your own rows.</p>
       </section>
 
       <section class="panel">
@@ -265,6 +267,42 @@ export async function renderSettings(container) {
     });
     root.querySelector('#s-purge-data')?.addEventListener('click', () => confirmDelete('data'));
     root.querySelector('#s-delete-account')?.addEventListener('click', () => confirmDelete('full'));
+
+    // Import backup (phase 2): merge on the server, never overwrite progress.
+    root.querySelector('#s-import')?.addEventListener('click', () => {
+      root.querySelector('#s-import-file')?.click();
+    });
+    root.querySelector('#s-import-file')?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      if (!confirm(`Import ${file.name}? Unknown items are restored; anything already present here keeps its current state.`)) return;
+      let backup;
+      try {
+        backup = JSON.parse(await file.text());
+      } catch {
+        toast('That file is not valid JSON.', 'neg');
+        return;
+      }
+      try {
+        const result = await api('/api/import', { method: 'POST', body: backup });
+        const i = result.imported ?? {};
+        const sk = result.skipped ?? {};
+        const lines = [
+          `${i.entries ?? 0} entries (${i.memories ?? 0} memory states)`,
+          `${i.collections ?? 0} collections`,
+          `${i.texts ?? 0} texts`,
+          `${i.profiles ?? 0} profiles, ${i.grammar ?? 0} grammar stages`,
+        ].join(', ');
+        const skippedLine = Object.entries(sk).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(', ');
+        toast(`Imported: ${lines}.`, 'pos');
+        if (skippedLine) toast(`Kept current versions of: ${skippedLine} - nothing was overwritten.`, 'info');
+        const { loadLanguages, refreshAll } = await import('../core/data.mjs');
+        await Promise.all([loadLanguages(), refreshAll()]);
+      } catch (err) {
+        toast(err.message ?? 'Import failed.', 'neg');
+      }
+    });
   };
 
   const confirmDelete = (mode) => {

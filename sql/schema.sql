@@ -248,8 +248,8 @@ CREATE TABLE IF NOT EXISTS user_data.grammar_progress (
 -- Simple daily quota per user and action, for AI-enrichment rate limiting.
 CREATE TABLE IF NOT EXISTS user_data.rate_limits (
   user_id UUID NOT NULL,
-  window  DATE NOT NULL,
+  window_day DATE NOT NULL,
   action  TEXT NOT NULL,
   count   INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (user_id, window, action)
+  UNIQUE (user_id, window_day, action)
 );

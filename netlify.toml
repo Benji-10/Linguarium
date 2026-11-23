@@ -16,6 +16,14 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+# The app calls the API at /api/* (same-origin, credentials ride along).
+# Netlify Dev proxies /api/* automatically, but PRODUCTION does not: without
+# this redirect every API call would 404 on a deployed site.
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
 [dev]
   command = "npm run dev:ui"
   targetPort = 3000

@@ -8,12 +8,12 @@ all of it should share a single knowledge state for the learner, and that no lan
 > Working title. The name is a single constant in `src/main.mjs`'s companion files
 > (`src/ui/layout.mjs`, `manifest.webmanifest`) if you ever want to change it.
 
-Status: **Phase 1 (initial usable version) is implemented and tested.** Phases 2 and 3
-are planned and architecturally prepared (see [docs/ROADMAP.md](docs/ROADMAP.md)).
+Status: **Phase 1 and Phase 2 are implemented and tested.** Phase 3 remains
+planned (see [docs/ROADMAP.md](docs/ROADMAP.md)).
 
 ---
 
-## What is in the box (phase 1)
+## What is in the box (phases 1 + 2)
 
 | Area | What works |
 | --- | --- |
@@ -23,12 +23,15 @@ are planned and architecturally prepared (see [docs/ROADMAP.md](docs/ROADMAP.md)
 | **Vocabulary** | Personal entries with provenance, readings, examples and your own notes; one shared knowledge state for reading, review and collections. |
 | **Collections** | Create and import word lists from CSV / JSON / plain text. **Unparsed entries are retained, not discarded**, shown for repair. Export to CSV/JSON any time. |
 | **FSRS review** | FSRS-5 spaced repetition with **three separate ability dimensions** (recognition, recall, production — production is typed, not multiple-choice). |
-| **Reading** | Interactive reader: click any word (per-character for languages without spaces), keep it, self-assess prior knowledge honestly, see per-reader difficulty estimates with a transparent breakdown. |
+| **Reading** | Interactive reader: click any word (per-character for languages without spaces), keep it, self-assess prior knowledge honestly, see per-reader difficulty estimates with a transparent breakdown. The library follows the language you are studying (with an "All languages" toggle). |
+| **Listening** | Read & listen: browser speech synthesis follows the transcript sentence by sentence (honestly labelled as synthesized, with live voice-availability reporting), or your own audio items referenced by https URL with mandatory source and licence metadata — never stored in the database. |
 | **Knowledge** | Vocabulary lookup with everything known about a term: entry, memory state per dimension, verified etymology when sourced, AI analysis clearly labelled separately, your notes. |
-| **Grammar** | Structures as first-class citizens with a four-layer progression (encountered → recognized → understood → independent use). |
+| **Grammar** | Structures as first-class citizens with a four-layer progression (encountered → recognized → understood → independent use) **and generated cloze/recall exercises** from each structure's example sentences — correct answers advance the stage. Korean and Chinese structure sets are seeded. |
+| **Seeded library** | 32 texts across 14 languages with topic tags and honest provenance (public-domain classics transcribed with sources, original demonstration texts labelled as such) — including **six Korean texts** and three Chinese texts. |
 | **Progress** | Dashboard aggregates: due counts, streaks, knowledge-state distribution (reflecting real performance, never "opened a card"). |
-| **Offline / PWA** | Installable, offline reading/review/lookup via IndexedDB + service worker, change queue with conflict-safe sync (learning progress is never silently overwritten), portable JSON backup export. |
-| **AI (optional)** | Vocabulary enrichment via **Gemini `gemini-3.1-flash-lite`** — structured output, cached per term, daily per-user quota. Without `GEMINI_API_KEY` every core feature still works; AI sections show as explicitly disabled. |
+| **Offline / PWA** | Installable, offline reading/review/lookup/practice via IndexedDB + service worker, change queue with conflict-safe sync (learning progress is never silently overwritten), Background Sync wake-up where supported, portable JSON backup **export and import** (merge rules, nothing newer overwritten). |
+| **AI (optional)** | Vocabulary enrichment via **Gemini `gemini-3.1-flash-lite`** — structured output, cached per term, daily per-user quota — plus optional writing-practice feedback (`/api/ai-check`), always labelled unverified. Without `GEMINI_API_KEY` every core feature still works; AI sections show as explicitly disabled. |
+| **Writing practice** | Prompts built from the words and grammar you are actually learning; free-text answers with honest self-assessment feeding the production dimension of FSRS through the same review pipeline as everything else. |
 
 ### Non-negotiable principles baked into the code
 
@@ -102,7 +105,11 @@ grammar catalog and language presets appear. Three equivalent ways, pick one:
   ever creates shared `knowledge` data and empty `user_data` tables — it can
   never touch user content. Without `ADMIN_KEY` the endpoint answers 404.
 - **Locally:** `cp .env.example .env`, fill `DATABASE_URL`, then `npm run db:init`
-  (schema + seed) or `npm run db:seed` (seed only, after schema creation).
+  (schema + seed) or `npm run db:seed
+
+# Validate the SQL without any database (embedded Postgres, no connection):
+node scripts/validate-seed.mjs         # schema + seed apply cleanly, topics/grammar present
+node scripts/validate-phase2-sql.mjs   # the phase-2 statements run on real Postgres` (seed only, after schema creation).
   `node scripts/db-init.mjs --dry-run` validates the SQL files without a database.
 - **In the Neon SQL editor:** paste the contents of `sql/schema.sql` followed by
   `sql/seed.sql`.
@@ -144,6 +151,11 @@ Requires Node.js ≥ 20 (the build uses Node 22 on Netlify — see `.nvmrc`).
 npm install                # esbuild, @netlify/identity, @neondatabase/serverless
 cp .env.example .env       # fill DATABASE_URL (local or Neon); GEMINI_API_KEY optional
 npm run db:init            # create schema + seed (npm run db:seed = seed only)
+
+# Upgrading a database seeded before phase 2:
+# re-run the same command - the seed is idempotent (IF NOT EXISTS / ON CONFLICT),
+# it only adds the new texts, topics, grammar structures and columns.
+npm run db:seed
 npm run dev                # netlify dev (via npx): dist + functions + local Identity
 ```
 

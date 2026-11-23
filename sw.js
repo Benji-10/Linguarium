@@ -46,6 +46,27 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Background Sync (phase 2): the app registers 'linguarium-flush' whenever
+// the offline queue grows. When connectivity returns, the browser fires this
+// event; we wake any open client and tell it to flush its queue. (When no
+// client is open, the queue simply waits for the next app open + 'online'
+// listener, which has always worked.)
+self.addEventListener('sync', (syncEvent) => {
+  if (syncEvent.tag !== 'linguarium-flush') return;
+  syncEvent.waitUntil(
+    (async () => {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clients) {
+        client.postMessage({ type: 'flush-queue' });
+      }
+    })(),
+  );
+});
+
+self.addEventListener('message', (msgEvent) => {
+  if (msgEvent.data?.type === 'skip-waiting') self.skipWaiting();
+});
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 

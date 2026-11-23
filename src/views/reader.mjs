@@ -24,6 +24,7 @@ import { scoreText } from '../shared/difficulty.mjs';
 import { deriveStatus } from '../shared/status.mjs';
 import { DIFFICULTY_MODES } from '../shared/constants.mjs';
 import { getCachedText, putCachedText, cacheEnrichment, getEnrichment } from '../core/idb.mjs';
+import { attachListenBar } from '../shared/listen.mjs';
 
 export async function renderReader(container, params) {
   const { kind, id } = params; // kind: user | shared
@@ -109,6 +110,14 @@ export async function renderReader(container, params) {
 
     <div class="reader-body ${rtl ? 'rtl' : ''}" id="reader-body" dir="${rtl ? 'rtl' : 'ltr'}" lang="${esc(language)}"></div>
 
+    <div class="listen-bar" id="listen-bar" hidden>
+      <button class="btn subtle small" id="listen-play">${icon('headphones')}Listen</button>
+      <button class="icon-btn" id="listen-prev" title="Previous sentence">${icon('chevron')}</button>
+      <button class="icon-btn" id="listen-next" title="Next sentence">${icon('chevron')}</button>
+      <span class="muted small" id="listen-note"></span>
+    </div>
+    <div id="listen-audio"></div>
+
     <aside class="word-panel" id="word-panel" hidden>
       <header>
         <div class="word-term-wrap">
@@ -125,6 +134,41 @@ export async function renderReader(container, params) {
 
   const body = container.querySelector('#reader-body');
   renderTokens(body, text.body ?? '', tokenizer, classify, rtl);
+
+  // Listening environment (phase 2) --------------------------------------------------
+  // Audio referenced by URL plays through a plain <audio> element (never
+  // stored as a binary blob); texts without audio are read aloud by the
+  // browser's speech system, sentence by sentence, following the transcript.
+  // Terms stay clickable while listening - clicking one pauses playback so
+  // it can be inspected.
+  let stopListen = null;
+  {
+    const audioUrl = text.audio_url ?? null;
+    if (audioUrl) {
+      const host = container.querySelector('#listen-audio');
+      host.innerHTML = `
+        <div class="listen-note-panel">
+          <div><strong>Audio for this text</strong> ${icon('headphones')}</div>
+          <p class="muted small">Played straight from its source URL - the file is never copied into the database. Sentence highlighting is not synced to the recording; the transcript below stays clickable.</p>
+          <audio controls preload="none" src="${esc(audioUrl)}" style="width:100%; margin-top:8px"></audio>
+        </div>`;
+      container.querySelector('#listen-bar').hidden = true;
+    } else {
+      const listen = attachListenBar({ container, language, langLabel });
+      stopListen = listen.destroy;
+      // Pausing on term click keeps the word panel readable while listening.
+      body.addEventListener('click', (e) => {
+        if (e.target.closest('.tok') && listen.isPlaying()) listen.pause();
+      }, { capture: true });
+      // Auto-start when opened from the Listening page.
+      try {
+        if (sessionStorage.getItem('linguarium.autolisten') === '1') {
+          sessionStorage.removeItem('linguarium.autolisten');
+          setTimeout(() => listen.play(), 400);
+        }
+      } catch { /* storage unavailable - just no autoplay */ }
+    }
+  }
 
   // Position restore + autosave -------------------------------------------------
   if (savedPosition.scrollTop) {
@@ -440,25 +484,47 @@ export async function renderReader(container, params) {
   return () => {
     clearInterval(interval);
     savePosition();
+    if (stopListen) stopListen();
   };
 }
 
 function renderTokens(body, text, tokenizer, classify, rtl) {
   const frag = document.createDocumentFragment();
-  let last = 0;
-  for (const tok of tokenize(text, tokenizer)) {
-    if (tok.start > last) {
-      frag.appendChild(document.createTextNode(text.slice(last, tok.start)));
+  // Sentences are wrapped so listening mode can highlight and scroll to one.
+  for (const b of sentenceBounds(text)) {
+    const sent = document.createElement('span');
+    sent.className = 'sent';
+    let last = b.start;
+    for (const tok of tokenize(text.slice(b.start, b.end), tokenizer)) {
+      const absStart = b.start + tok.start;
+      const absEnd = b.start + tok.end;
+      if (absStart > last) sent.appendChild(document.createTextNode(text.slice(last, absStart)));
+      const span = document.createElement('span');
+      span.className = `tok ${classify(normalizeTerm(tok.text, tokenizer))}`;
+      span.dataset.raw = tok.text;
+      span.textContent = tok.text;
+      sent.appendChild(span);
+      last = absEnd;
     }
-    const span = document.createElement('span');
-    span.className = `tok ${classify(tok.text && normalizeTerm(tok.text, tokenizer))}`;
-    span.dataset.raw = tok.text;
-    span.textContent = tok.text;
-    frag.appendChild(span);
-    last = tok.end;
+    if (last < b.end) sent.appendChild(document.createTextNode(text.slice(last, b.end)));
+    frag.appendChild(sent);
   }
-  if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
   body.replaceChildren(frag);
+}
+
+/** Contiguous sentence ranges: end at . ! ? … 。！？ ؟ or a newline. */
+function sentenceBounds(text) {
+  const out = [];
+  const re = /[.!?…。！？؟\n]/gu;
+  let cursor = 0;
+  let m;
+  while ((m = re.exec(text))) {
+    const end = m.index + m[0].length;
+    out.push({ start: cursor, end });
+    cursor = end;
+  }
+  if (cursor < text.length) out.push({ start: cursor, end: text.length });
+  return out.filter((b) => b.end > b.start);
 }
 
 function licenseLabel(license) {

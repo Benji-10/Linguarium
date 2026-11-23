@@ -18,10 +18,11 @@
     "db:seed": "node scripts/db-init.mjs --seed-only"
   },
   "dependencies": {
-    "@netlify/identity": "^2.0.1",
-    "@neondatabase/serverless": "^1.2.1"
+    "@neondatabase/serverless": "^1.2.1",
+    "@netlify/identity": "^2.0.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.17",
     "esbuild": "^0.28.2"
   }
 }

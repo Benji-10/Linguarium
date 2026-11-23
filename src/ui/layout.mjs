@@ -15,14 +15,14 @@ const NAV_GROUPS = [
       { hash: '#/', icon: 'dashboard', label: 'Dashboard' },
       { hash: '#/discover', icon: 'compass', label: 'Discover' },
       { hash: '#/reading', icon: 'book', label: 'Reading' },
-      { hash: '#/listening', icon: 'headphones', label: 'Listening', soon: true },
+      { hash: '#/listening', icon: 'headphones', label: 'Listening' },
     ],
   },
   {
     label: 'Practice',
     items: [
       { hash: '#/review', icon: 'review', label: 'Review' },
-      { hash: '#/practice', icon: 'pencil', label: 'Writing', soon: true },
+      { hash: '#/practice', icon: 'pencil', label: 'Writing' },
       { hash: '#/grammar', icon: 'brain', label: 'Grammar' },
     ],
   },

@@ -566,3 +566,418 @@ INSERT INTO knowledge.grammar_structures (language_code, name, summary, explanat
     'Linguarium demonstration content (project team). Standard textbook grammar of Latin.'
   )
 ON CONFLICT (language_code, name) DO NOTHING;
+
+-- ================================================================
+-- Phase 2 content batch: a richer library and grammar coverage.
+--
+-- Fixes reported after phase 1:
+--   * the library was thin (one short text per language) — this batch
+--     adds longer and more varied material, including SIX Korean texts
+--     (previously Korean had none at all).
+--   * topic tags (new column) so Discover can filter by subject.
+--
+-- Labelling rules stay the same as the earlier batches:
+--   'verified'  - transcribed from the cited work, high confidence.
+--   'community' - demonstration content by the project team, or
+--                 classic public-domain openings transcribed from
+--                 memory as commonly printed (NOT checked against a
+--                 critical edition - the source_ref says so).
+-- ================================================================
+
+-- Migration for databases created before the rate_limits fix: "window" is a
+-- reserved keyword in PostgreSQL, so the original CREATE TABLE failed on Neon.
+-- Rename it if a table with the old column somehow exists.
+DO $$
+BEGIN
+  ALTER TABLE user_data.rate_limits RENAME COLUMN "window" TO window_day;
+EXCEPTION WHEN undefined_column OR undefined_table THEN NULL;
+END $$;
+
+ALTER TABLE knowledge.shared_texts ADD COLUMN IF NOT EXISTS topic TEXT;
+ALTER TABLE user_data.texts ADD COLUMN IF NOT EXISTS topic TEXT;
+ALTER TABLE user_data.texts ADD COLUMN IF NOT EXISTS audio_url TEXT;
+
+-- Topic tags for the phase-1 texts (idempotent re-runs).
+UPDATE knowledge.shared_texts SET topic = 'classic' WHERE title LIKE 'De Bello%';
+UPDATE knowledge.shared_texts SET topic = 'classic' WHERE title LIKE 'Der Froschk%';
+UPDATE knowledge.shared_texts SET topic = 'fable'  WHERE title LIKE 'The North Wind%';
+UPDATE knowledge.shared_texts SET topic = 'classic' WHERE title LIKE 'Le Corbeau%';
+UPDATE knowledge.shared_texts SET topic = 'classic' WHERE title LIKE 'La Cigale%';
+UPDATE knowledge.shared_texts SET topic = 'classic' WHERE title LIKE 'Don Quijote%';
+UPDATE knowledge.shared_texts SET topic = 'classic' WHERE title LIKE 'Divina Commedia%';
+UPDATE knowledge.shared_texts SET topic = 'classic' WHERE title LIKE 'Os Lus%';
+UPDATE knowledge.shared_texts SET topic = 'classic' WHERE title LIKE '%Онегин%';
+UPDATE knowledge.shared_texts SET topic = 'poem'    WHERE language_code = 'eo';
+UPDATE knowledge.shared_texts SET topic = 'classic' WHERE title LIKE '%吾輩%';
+UPDATE knowledge.shared_texts SET topic = 'story'   WHERE language_code = 'tok' AND title LIKE 'tenpo%';
+UPDATE knowledge.shared_texts SET topic = 'classic' WHERE title LIKE 'Alice%';
+
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  (
+    'ko',
+    '일요일 (a Sunday diary)',
+    $$일요일 아침에 나는 늦게 일어났습니다. 창밖에 새가 노래를 했습니다. 나는 세수를 하고, 아침을 먹었습니다. 그리고 커피를 한 잔 마셨습니다. 책상에 앉아서 책을 읽었습니다. 책이 재미있어서 시간이 빨리 지났습니다.
+    점심쯤에 친구에게 전화를 걸었습니다. 우리는 같이 산책하기로 했습니다. 공원에 사람이 많았습니다. 날씨가 좋았기 때문입니다. 나무 아래에 앉아서 이야기를 나누었습니다. 친구는 요즘 새로운 일을 시작했다고 했습니다. 나는 친구가 자랑스러웠습니다.
+    저녁에는 집에 돌아와서 국수를 끓여 먹었습니다. 그리고 조용히 음악을 들었습니다. 오늘은 평화로운 하루였습니다. 내일은 다시 일찍 일어나야 합니다. 그래서 일찍 잠들었습니다.$$,
+    'Linguarium demonstration content (project team)',
+    NULL,
+    'unspecified (demo)',
+    'community',
+    'Original demonstration text written for this project. Everyday vocabulary, polite -습니다 style, past-tense narration.',
+    'daily-life'
+  ),
+  (
+    'ko',
+    '시장에서 (at the market)',
+    $$점심 준비를 하다가 우유가 떨어졌습니다. 엄마가 말했습니다. "우유 한 병과 빵 두 개를 사 와 주겠니?"
+    나는 시장으로 갔습니다. 시장에는 사람이 많았습니다. 가게 아주머니가 친절하게 물었습니다. "무엇을 드릴까요?" 나는 대답했습니다. "우유 한 병하고 빵 두 개 주세요."
+    아주머니는 봉지에 우유와 빵을 담아 주셨습니다. "모두 사천 원이에요." 나는 돈을 내고 고개를 숙여 인사했습니다. "감사합니다. 안녕히 계세요."
+    돌아오는 길에 붕어빵 냄새가 참 좋았습니다. 하지만 참았습니다. 집에 와서 엄마에게 물건을 드렸더니, 엄마는 기뻐하셨습니다.$$,
+    'Linguarium demonstration content (project team)',
+    NULL,
+    'unspecified (demo)',
+    'community',
+    'Original demonstration text written for this project. Simple dialogue with shopping vocabulary and prices.',
+    'dialogue'
+  ),
+  (
+    'ko',
+    '고양이와 달 (the cat and the moon)',
+    $$옛날에 마을에 작은 고양이 한 마리가 살았습니다. 고양이는 밤마다 지붕에 올라가서 달을 보았습니다. 달은 둥글고 밝았습니다.
+    어느 날 밤, 고양이는 생각했습니다. "저 달을 만져 보고 싶다." 그래서 고양이는 높은 산으로 달을 따라 올라갔습니다. 산꼭대기에 도착했지만, 달은 여전히 멀리 있었습니다. 고양이는 다리가 아파서 주저앉았습니다.
+    그때 아래에 연못이 보였습니다. 연못 안에도 달이 있었습니다. 고양이는 기뻐서 연못으로 달려갔습니다. 그러나 발이 물에 닿는 순간, 달은 사라졌습니다. 고양이는 젖은 발을 보면서 한숨을 쉬었습니다.
+    그날 밤, 고양이는 다시 지붕 위에 앉았습니다. 머리 위에 달이 떠 있었습니다. 달은 어제처럼 아름다웠습니다. 고양이는 조용히 웃었습니다. "달은 구경하는 것만으로 충분하다."
+    그 후로 고양이는 매일 밤 지붕에서 달을 구경했습니다.$$,
+    'Linguarium demonstration content (project team)',
+    NULL,
+    'unspecified (demo)',
+    'community',
+    'Original demonstration fable-style story written for this project. Simple narrative past tense with common everyday verbs.',
+    'story'
+  ),
+  (
+    'ko',
+    '친구에게 보내는 편지 (a letter to a friend)',
+    $$민수에게,
+
+    안녕? 오랜만이야. 잘 지내고 있어? 나는 요즘 좀 한가로워.
+    아침마다 뒷산에 올라가. 요즘 산에 벚꽃이 피었어. 정말 예뻐. 사진을 창피하게 못 찍어서 미안하지만, 직접 보면 놀랄 거야.
+    지난주에는 할머니 댁에 다녀왔어. 할머니가 김치찌개를 끓여 주셨는데, 아직도 그 맛이 생각나. 할머니는 늘 건강하시대.
+    너도 언제 한번 우리 집에 와. 같이 밥 먹고 이야기하자. 요즘 좋아하는 노래가 있으면 알려 줘. 나도 재미있는 책을 하나 소개해 줄게.
+    답장 기다릴게. 몸 조심하고, 공부도 적당히 하길.
+
+    지수가.$$,
+    'Linguarium demonstration content (project team)',
+    NULL,
+    'unspecified (demo)',
+    'community',
+    'Original demonstration letter written for this project. Casual -요 style between friends with common letter conventions.',
+    'letter'
+  ),
+  (
+    'ko',
+    '한국의 사계절 (the four seasons of Korea)',
+    $$한국에는 뚜렷한 사계절이 있다.
+    봄에는 꽃이 핀다. 벚꽃이 길을 하얗게 물들인다. 사람들은 공원으로 나가서 꽃구경을 하고 사진을 찍는다.
+    여름은 덥고 습하다. 사람들은 삼계탕을 먹으면서 더위를 이긴다. 바다나 계곡으로 휴가를 떠나는 사람도 많다. 저녁에는 시원한 냉면이 인기다.
+    가을은 하늘이 높고 선선하다. 단풍이 산을 붉게 물들인다. 주말마다 등산객이 산으로 몰린다. 농촌에서는 추수가 한창이다. 갓 딴 사과와 배가 시장에 나온다.
+    겨울은 춥고 눈이 자주 온다. 아이들은 눈사람을 만들고 눈싸움을 한다. 어른들은 뜨거운 팥죽이나 군고구마로 몸을 데운다.
+    이렇게 계절마다 풍경과 음식과 놀이가 다르다. 그래서 한국 사람들은 계절의 변화를 생활과 문화 속에서 느낀다.$$,
+    'Linguarium demonstration content (project team)',
+    NULL,
+    'unspecified (demo)',
+    'community',
+    'Original demonstration text written for this project. Plain expository -다 style with season and food vocabulary.',
+    'culture'
+  ),
+  (
+    'ko',
+    '첫 눈 (the first snow)',
+    $$어제 밤에 첫눈이 왔습니다. 아침에 일어나서 창밖을 보니, 세상이 하얗게 변해 있었습니다. 지붕과 길과 나무 위에 눈이 쌓였습니다.
+    나는 따뜻한 옷을 입고 밖으로 나갔습니다. 공기가 차고 상쾌했습니다. 아이들이 밖에 나와서 눈싸움을 하고 있었습니다. 어떤 아이는 커다란 눈사람을 만들고 있었습니다. 나도 눈을 한 줌 집어서 하늘로 던졌습니다. 눈송이가 얼굴에 닿았을 때, 어린 시절이 갑자기 떠올랐습니다. 그때도 친구들과 함께 눈덩이를 굴렸습니다.
+    집에 들어와서 뜨거운 차를 한 잔 마셨습니다. 창밖에는 눈이 아직도 조용히 내리고 있었습니다. 겨울이 왔다는 생각에 마음이 이상하게 들떴습니다. 내일은 일찍 일어나서 눈길을 걸어 보고 싶습니다.$$,
+    'Linguarium demonstration content (project team)',
+    NULL,
+    'unspecified (demo)',
+    'community',
+    'Original demonstration text written for this project. Past-tense narration with weather and feeling vocabulary.',
+    'daily-life'
+  ),
+  (
+    'zh',
+    '我的一天 (my day)',
+    $$早上七点，闹钟响了。我起床、洗脸、刷牙。妈妈已经做好了早饭。我吃了包子和豆浆，觉得很舒服。
+    上午我有两节课：数学和语文。数学有点难，但是老师讲得很清楚。中午我和同学一起去食堂吃饭。米饭、青菜，还有一个鸡蛋。
+    下午没有课。我在图书馆看了一会儿书，然后去操场打了半小时篮球。晚上吃完饭，我帮妈妈洗了碗，然后写作业。
+    十点半，我上床睡觉。今天是普通但是舒服的一天。$$,
+    'Linguarium demonstration content (project team)',
+    NULL,
+    'unspecified (demo)',
+    'community',
+    'Original demonstration text written for this project. High-frequency daily vocabulary, simple sentence patterns.',
+    'daily-life'
+  ),
+  (
+    'zh',
+    '静夜思 (quiet night thoughts)',
+    $$床前明月光，疑是地上霜。
+举头望明月，低头思故乡。$$,
+    '李白 (Li Bai)',
+    NULL,
+    'public-domain',
+    'verified',
+    'Tang-dynasty quatrain by Li Bai (701-762), universally printed standard text. Public domain.',
+    'poem'
+  ),
+  (
+    'zh',
+    '狐假虎威 (opening)',
+    $$虎求百兽而食之，得狐。狐曰：“子无敢食我也！天帝使我长百兽，今子食我，是逆天帝命也。子以我为不信，吾为子先行，子随我后，观百兽之见我而敢不走乎？”……$$,
+    '《战国策》 (traditional)',
+    NULL,
+    'public-domain',
+    'community',
+    'Classical Chinese fable (Zhanguo ce), traditional text, public domain. Transcribed as commonly printed; not checked against a critical edition. Classical register - challenge material.',
+    'fable'
+  ),
+  (
+    'el',
+    'Ο καιρός σήμερα (the weather today)',
+    $$Σήμερα το πρωί έβρεξε πολύ. Ο ουρανός ήταν γκρι και τα πουλιά δεν τραγουδούσαν. Πήρα την ομπρέλα μου και πήγα στη δουλειά με τα πόδια.
+    Το απόγευμα ο ήλιος βγήκε ξαφνικά και ο ουρανός έγινε γαλάζιος. Το πάρκο κοντά στο σπίτι μου γέμισε κόσμο. Πήρα έναν καφέ και κάθισα σε ένα παγκάκι. Δύο παιδιά έπαιζαν μπάλα. Μια γυναίκα διάβαζε βιβλίο κάτω από ένα δέντρο.
+    Το βράδυ φύσηξε λίγο άνεμος και έκανε δροσιά. Αύριο λένε ότι θα έχει ήλιο. Ελπίζω να πάω για περπάτημα στη θάλασσα.$$,
+    'Linguarium demonstration content (project team)',
+    NULL,
+    'unspecified (demo)',
+    'community',
+    'Original demonstration text written for this project. Everyday Modern Greek with weather vocabulary.',
+    'daily-life'
+  ),
+  (
+    'de',
+    'Rotkäppchen (opening)',
+    $$Es war einmal ein süßes kleines Mädchen; es hatte jedermann gern, der es ansah, am liebsten aber seine Großmutter, die wußte nicht, was sie alles für das Kind gab. Einmal schenkte sie ihm ein Käppchen von rotem Samt, und weil ihm das so wohl stand und es sonst nichts mehr trug, hieß es nur das Rotkäppchen.$$,
+    'Brüder Grimm',
+    NULL,
+    'public-domain',
+    'community',
+    'Kinder- und Hausmärchen no. 26, 1857 edition (public domain). Transcribed from memory as commonly printed; not checked against a critical edition.',
+    'classic'
+  ),
+  (
+    'de',
+    'Hänsel und Gretel (opening)',
+    $$Vor einem großen Walde wohnte ein armer Holzhacker mit seiner Frau und seinen zwei Kindern; das Knäblein hieß Hänsel und das Mädchen Gretel. Es hatte wenig zu essen, und einmal, als große Teuerung ins Land kam, konnte er das tägliche Brot nicht mehr schaffen.$$,
+    'Brüder Grimm',
+    NULL,
+    'public-domain',
+    'community',
+    'Kinder- und Hausmärchen no. 15, 1857 edition (public domain). Transcribed from memory as commonly printed; not checked against a critical edition.',
+    'classic'
+  ),
+  (
+    'fr',
+    'Il pleure dans mon cœur (opening stanzas)',
+    $$Il pleure dans mon cœur
+Comme il pleut sur la ville ;
+Quelle est cette langueur
+Qui pénètre mon cœur ?
+
+Ô bruit doux de la pluie
+Par terre et sur les toits !
+Pour un cœur qui s'ennuie,
+Ô le chant de la pluie !$$,
+    'Paul Verlaine',
+    NULL,
+    'public-domain',
+    'community',
+    'Romances sans paroles, 1874 (public domain). Transcribed from memory as commonly printed; not checked against a critical edition.',
+    'poem'
+  ),
+  (
+    'la',
+    'Lupus et agnus (opening)',
+    $$Lupus et agnus, siti compulsi, ad rivum eundem venerant. Superior stabat lupus, longeque inferior agnus. Tunc fautor fraudis, provocandi studio, quaesivit causam iurgii.$$,
+    'Phaedrus (traditional)',
+    NULL,
+    'public-domain',
+    'community',
+    'Fabulae Aesopiae I.1 (Phaedrus, 1st century CE, public domain). Transcribed from memory as commonly printed; not checked against a critical edition.',
+    'fable'
+  ),
+  (
+    'ru',
+    'Зимнее утро (первая строфа)',
+    $$Мороз и солнце; день чудесный!
+Ещё ты дремлешь, друг прелестный —
+Пора, красавица, проснись:
+Открой сомкнуты негой взоры
+Навстречу северной Авроры,
+Звездою севера явись!$$,
+    'А. С. Пушкин',
+    NULL,
+    'public-domain',
+    'community',
+    '1829 poem by Pushkin (public domain). Transcribed from memory as commonly printed; not checked against a critical edition.',
+    'poem'
+  ),
+  (
+    'ja',
+    '坊っちゃん (opening)',
+    $$親譲りの無鉄砲で小供の時から損ばかりしている。小学校に居る時分学校の二階から飛び降りて一週間ほど腰を抜かした事がある。なぜそんな無闇をしたと聞く人があるかも知れぬ。別段深い理由でもない。$$,
+    '夏目漱石',
+    NULL,
+    'public-domain',
+    'community',
+    'Bocchan, 1906 novel by Natsume Soseki (public domain). Transcribed from memory as commonly printed; not checked against a critical edition.',
+    'classic'
+  ),
+  (
+    'en',
+    'The Boy Who Cried Wolf',
+    $$A shepherd boy was watching the village sheep near a dark forest. It was lonely, so he thought of a plan to get some company. He rushed toward the village crying out loudly, "Wolf! Wolf!"
+    The villagers came running to help, but found no wolf. The boy laughed at them and they went back, annoyed. He tried the same trick again, and again the villagers ran up — and again there was no wolf.
+    Then one evening a real wolf did spring from the underbrush and scattered the flock. The boy screamed, "Wolf! Wolf!" but this time the villagers thought he was lying again, and no one came. The wolf made a good meal of the sheep that night.$$,
+    'Aesop (Perry 333, traditional English retelling)',
+    NULL,
+    'public-domain',
+    'community',
+    'Standard English retelling of Aesop fable Perry 333, as commonly printed for children. Not a cited edition.',
+    'fable'
+  ),
+  (
+    'es',
+    'Un domingo en casa (a Sunday at home)',
+    $$El domingo me levanté tarde. Hacía sol y el café olía muy bien. Después del desayuno ordené mi cuarto y escuché música.
+    Al mediodía cociné arroz con pollo. No quedó mal, aunque la sal era poca. Mi hermana dijo que la próxima vez ella cocina y yo lavo los platos. Acordamos.
+    Por la tarde leí un rato en el balcón y llamé a mi abuela. Siempre me pregunta lo mismo: ¿comiste bien? Sí, abuela, comí bien.
+    Al anochecer salimos a caminar por el parque. Había familias, perros y vendedores de helado. Volvimos a casa cansados y contentos. Los domingos son así: lentos, simples y buenos.$$,
+    'Linguarium demonstration content (project team)',
+    NULL,
+    'unspecified (demo)',
+    'community',
+    'Original demonstration text written for this project. Everyday Spanish with household and weekend vocabulary.',
+    'daily-life'
+  ),
+  (
+    'tok',
+    'kala lili (the little fish)',
+    $$tenpo pini la, jan wan li jo e kala lili tu. kala lili li lon poki telo. jan li moku e kala suli taso. kala lili li ken ala moku e jan. taso jan li moku ala e kala lili.
+    jan li toki tawa kala: "mi awen e sina. sina kama suli la, mi moku e sina." tenpo suno mute li tawa. kala lili li kama suli.
+    tenpo wan la, jan li kama tawa poki telo. kala li suli. jan li lukin e kala. jan li pilin: "kala ni li suli. mi wile moku e ona." taso tenpo mute la, kala li pona tawa jan. jan li pilin pona tawa kala kin.
+    jan li moku ala e kala. jan li pana e moku tawa kala ale. kala ale li suli li pona. ni li pona tawa jan ale.$$,
+    'Linguarium demonstration content (project team)',
+    NULL,
+    'unspecified (demo)',
+    'community',
+    'Original demonstration story written for this project using core vocabulary only.',
+    'story'
+  )
+ON CONFLICT (language_code, title) DO NOTHING;
+
+-- Korean grammar structures (previously Korean had none).
+INSERT INTO knowledge.grammar_structures (language_code, name, summary, explanation, examples, provenance, source_ref) VALUES
+  (
+    'ko',
+    'Topic particles 은/는',
+    '은/는 mark what the sentence is about.',
+    'Korean marks the topic of the sentence with 은 after a consonant and 는 after a vowel. The topic is often the thing already being talked about; it can be the subject or something else. Compare with 이/가, which mark the grammatical subject in neutral statements.',
+    '[{"text": "저는 학생입니다.", "translation": "As for me, I am a student."}, {"text": "이 책은 재미있어요.", "translation": "This book (as for it) is interesting."}]',
+    'community',
+    'Linguarium demonstration content (project team). Basic, widely documented facts about Korean grammar.'
+  ),
+  (
+    'ko',
+    'Subject particles 이/가',
+    '이/가 mark the grammatical subject.',
+    'The subject particle is 이 after a consonant and 가 after a vowel. In neutral news-like sentences the subject takes 이/가; when the noun is the shared topic of conversation it takes 은/는 instead. Both particles are often dropped in casual speech when the role is clear.',
+    '[{"text": "비가 와요.", "translation": "Rain is coming. (It is raining.)"}, {"text": "제 이름은 지수입니다.", "translation": "My name is Jisoo. (topic 제 이름, no subject particle needed)"}]',
+    'community',
+    'Linguarium demonstration content (project team). Basic, widely documented facts about Korean grammar.'
+  ),
+  (
+    'ko',
+    'Object particle 을/를',
+    '을/를 mark the direct object.',
+    'The object particle is 을 after a consonant and 를 after a vowel: 책을, 커피를. It is often omitted in casual speech when the meaning is clear, but keeping it makes the sentence unambiguous — useful in writing.',
+    '[{"text": "저는 책을 읽습니다.", "translation": "I read a book. (책 book + 을 object)"}, {"text": "커피를 마셨어요.", "translation": "(I) drank coffee. (커피 coffee + 를 object)"}]',
+    'community',
+    'Linguarium demonstration content (project team). Basic, widely documented facts about Korean grammar.'
+  ),
+  (
+    'ko',
+    'Formal polite endings -습니다/-ㅂ니다',
+    'The formal polite style for statements.',
+    'Statements in the formal polite style end in -습니다 after a verb stem ending in a consonant and -ㅂ니다 after a vowel: 먹습니다, 갑니다. Questions end in -습니까/-ㅂ니까. This is the style of news, announcements, presentations and polite service encounters.',
+    '[{"text": "저는 아침에 커피를 마십니다.", "translation": "I drink coffee in the morning."}, {"text": "지금 갑니다.", "translation": "I am going now. (stem 가- + ㅂ니다)"}]',
+    'community',
+    'Linguarium demonstration content (project team). Basic, widely documented facts about Korean grammar.'
+  ),
+  (
+    'ko',
+    'Casual polite -요 style',
+    'The everyday polite style.',
+    'The -요 style is polite but friendly — the default for conversations with people you know but are not close to. Verb stems take -아요 after ㅏ/ㅗ vowels, -어요 otherwise, and 하다 becomes 해요: 가요, 먹어요, 해요.',
+    '[{"text": "오늘 날씨가 좋아요.", "translation": "The weather is nice today. (좋다 + 아요)"}, {"text": "커피 마시고 싶어요.", "translation": "I want to drink coffee. (싶어요 casual polite)"}]',
+    'community',
+    'Linguarium demonstration content (project team). Basic, widely documented facts about Korean grammar.'
+  ),
+  (
+    'ko',
+    'Past tense -았/었-',
+    'Verb stems take -았- or -었- for the past.',
+    'For the past tense, insert -았- after stems with ㅏ/ㅗ vowels and -었- otherwise, then add a style ending: -습니다 (formal), -어요 (casual polite), or plain -다: 가았어요 contracts to 갔어요, 먹었어요, 갔습니다.',
+    '[{"text": "친구에게 전화를 걸었습니다.", "translation": "I called my friend. (걸- + 었 + 습니다)"}, {"text": "어제 비가 왔어요.", "translation": "It rained yesterday. (와서 contracted: 오 + 았어요 → 왔어요)"}]',
+    'community',
+    'Linguarium demonstration content (project team). Basic, widely documented facts about Korean grammar.'
+  ),
+  (
+    'ko',
+    '-고 싶다 (want to)',
+    'To want to do something.',
+    'Attach -고 싶다 to a verb stem for "want to ...": 먹고 싶다, 가고 싶다. It conjugates like an adjective: 싶어요, 싶었습니다. For third-person subjects use -고 싶어하다.',
+    '[{"text": "저는 한국에 가고 싶습니다.", "translation": "I want to go to Korea. (가- + 고 싶다)"}, {"text": "뭘 드시고 싶어요?", "translation": "What would you like to eat? (honorific 드시- + 고 싶어요)"}]',
+    'community',
+    'Linguarium demonstration content (project team). Basic, widely documented facts about Korean grammar.'
+  ),
+  (
+    'ko',
+    'Negation with 안 and 못',
+    'Two words for "not": plain and cannot.',
+    '안 before a verb negates plainly ("does not"); 못 means "cannot" — inability or impossibility. Long forms also exist with -지 않다 and -지 못하다. 안 가요 = I am not going; 못 가요 = I cannot go.',
+    '[{"text": "저는 오늘 안 가요.", "translation": "I am not going today. (plain negation 안)"}, {"text": "다리가 아파서 못 걸어요.", "translation": "My leg hurts so I cannot walk. (inability 못)"}]',
+    'community',
+    'Linguarium demonstration content (project team). Basic, widely documented facts about Korean grammar.'
+  )
+ON CONFLICT (language_code, name) DO NOTHING;
+
+-- Chinese grammar structures (previously Chinese had none).
+INSERT INTO knowledge.grammar_structures (language_code, name, summary, explanation, examples, provenance, source_ref) VALUES
+  (
+    'zh',
+    'The verbs 是, 有 and 在',
+    'Three verbs that beginners often confuse.',
+    '是 links two nouns (A is B). 有 expresses existence or possession (there is / to have). 在 marks location or an ongoing position (to be at). Using 是 where 在 or 有 is needed is the classic beginner error.',
+    '[{"text": "我妈妈是老师。", "translation": "My mother is a teacher. (A is B)"}, {"text": "桌子上有一本书。", "translation": "There is a book on the table. (existence 有)"}, {"text": "书在桌子上。", "translation": "The book is on the table. (location 在)"}]',
+    'community',
+    'Linguarium demonstration content (project team). Standard textbook facts about Mandarin grammar.'
+  ),
+  (
+    'zh',
+    'Measure words 个, 本, 只',
+    'Nouns are counted with measure words.',
+    'Chinese numbers cannot attach to bare nouns; a measure word sits between them. 个 is the general-purpose one; 本 is for books and bound volumes; 只 is for many animals. The measure word also appears after demonstratives: 这个, 那本.',
+    '[{"text": "两个包子", "translation": "two steamed buns (general measure 个)"}, {"text": "一本书", "translation": "one book (bound volume measure 本)"}, {"text": "一只猫", "translation": "one cat (animal measure 只)"}]',
+    'community',
+    'Linguarium demonstration content (project team). Standard textbook facts about Mandarin grammar.'
+  ),
+  (
+    'zh',
+    'The particle 了',
+    '了 marks a completed action.',
+    'The verbal 了 after a verb signals that the action is complete or closed off. It is not a tense by itself; context decides the reading. Sentence-final 了 often signals a new situation or change of state.',
+    '[{"text": "我吃了早饭。", "translation": "I ate breakfast. (completed action 了 after verb)"}, {"text": "下雨了。", "translation": "It started raining. (new situation, sentence-final 了)"}]',
+    'community',
+    'Linguarium demonstration content (project team). Standard textbook facts about Mandarin grammar.'
+  )
+ON CONFLICT (language_code, name) DO NOTHING;

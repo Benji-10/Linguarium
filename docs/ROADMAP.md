@@ -1,35 +1,44 @@
 # Roadmap
 
-Phase 1 (the initial usable version) is implemented. This is the plan for phases 2 and 3,
-carried over from the platform specification. Where phase 1 already laid groundwork,
+Phase 1 and phase 2 are implemented. This is the plan for phase 3,
+carried over from the platform specification. Where phase 1/2 laid groundwork,
 the groundwork is named.
 
-## Phase 2 — deeper practice and content
+## Phase 2 — deeper practice and content (SHIPPED)
 
-**Grammar explanations and practice.** The structures, provenance and four-layer
-progression (encountered → recognized → understood → independent use) already exist
-(`/api/grammar`, `#/grammar`). Next: generated cloze/transform exercises from the
-structures *and from the vocabulary you are actually learning*, feeding the
-production dimension of FSRS.
+**Grammar explanations and practice.** Structures, provenance and the four-layer
+progression (encountered → recognized → understood → independent use) with
+generated cloze/recall exercises from each structure's own example sentences
+(`#/grammar` → "Practise this structure"). A correct exercise advances the
+structure's stage; progress saves offline through the sync queue like everything
+else. Korean and Chinese structure sets are seeded.
 
-**Listening environment.** Audio referenced by URL with source and license metadata —
-never stored as binary blobs in the database. Transcripts open in the same interactive
-reader so one knowledge state serves listening and reading; term click-through during
-listening records encounters exactly like reading. The `#/listening` screen documents
-this honestly today.
+**Listening environment.** `#/listening` lists material for the active language
+and opens it in the reader with playback started. Texts without recordings are
+read aloud by the browser's speech system — labelled for what it is: synthesized,
+not a native recording, with honest voice-availability reporting. Audio items
+you add reference their https URL with mandatory source and license metadata and
+are never stored as binary blobs. Transcripts are interactive: term click-through
+during listening records encounters exactly like reading.
 
-**Writing practice.** Prompts built from your current vocabulary and grammar states;
-free-text answers with self-assessment feeding production FSRS memory; optional AI
-feedback, labelled as unverified. `#/practice` documents this today, and typed
-production review already works in `#/review?dimension=production`.
+**Writing practice.** `#/practice` builds prompts from the vocabulary you are
+actually learning and the grammar structures in progress; free-text answers get
+an honest self-assessment that feeds the production dimension of FSRS through the
+same review pipeline, and grammar stage progression when a structure was used.
+Optional AI feedback (Gemini, `gemini-3.1-flash-lite`) is offered when configured,
+labelled unverified everywhere.
 
-**Improved content discovery.** The scoring hooks already accept frequency ranks and
-subject familiarity (`src/shared/difficulty.mjs`); phase 2 adds the shared lexicon
-data, per-language frequency lists with licenses, and topic-tagged filtering.
+**Improved content discovery.** Topic-tagged filtering (`shared_texts.topic`,
+chips on `#/discover`) over a much larger seeded library — including six Korean
+texts (previously Korean had none), Chinese, Greek and more public-domain
+classics, all with the usual provenance labels. The difficulty hooks for
+frequency ranks remain ready for real frequency data.
 
-**Offline caching and sync hardening.** The queue and conflict rules exist and are
-tested; phase 2 adds background sync where supported, richer conflict surfacing and
-an import path for the backup format.
+**Offline caching and sync hardening.** Background Sync registration wherever the
+browser supports it (service worker wakes the app to flush the queue), the same
+tested conflict rules, and an import path for the backup format
+(Settings → Import backup; merge semantics in docs/DATABASE.md and
+netlify/functions/import.mjs).
 
 ## Phase 3 — content pipeline and personalization
 

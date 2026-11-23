@@ -254,11 +254,23 @@ export async function getEnrichment(language, term) {
 // ---------------------------------------------------------------- queue
 
 export async function enqueue(op) {
-  return safe(async () => {
+  const result = await safe(async () => {
     const db = await openDb();
     const t = db.transaction('queue', 'readwrite');
     t.objectStore('queue').add({ ...op, queued_at: Date.now() });
   });
+  // Ask the service worker for a Background Sync slot (phase 2): when the
+  // browser regains connectivity, the SW messages us to flush the queue -
+  // even if that happens before the user revisits the app.
+  try {
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator && 'SyncManager' in window) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      await reg?.sync?.register('linguarium-flush');
+    }
+  } catch {
+    /* Background Sync unavailable - the 'online' listener still flushes. */
+  }
+  return result;
 }
 
 export async function getQueue() {

@@ -27,13 +27,15 @@ export async function flushQueue({ silent = false } = {}) {
     const events = [];
     const entryUpserts = [];
     const deletes = [];
+    const grammarStages = [];
     for (const op of queue) {
       if (op.type === 'review') events.push(op.payload);
       else if (op.type === 'entryUpsert') entryUpserts.push(op.payload);
       else if (op.type === 'delete') deletes.push(op.payload);
+      else if (op.type === 'grammarStage') grammarStages.push(op.payload);
     }
 
-    const result = await api('/api/sync', { method: 'POST', body: { events, entryUpserts, deletes } });
+    const result = await api('/api/sync', { method: 'POST', body: { events, entryUpserts, deletes, grammarStages } });
 
     // Clear everything that was flushed.
     await removeFromQueue(queue.map((q) => q.id));

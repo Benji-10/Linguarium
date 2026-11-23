@@ -5,6 +5,7 @@
  *   events     - review events (append-only, idempotent by UUID)
  *   entryUpserts - vocabulary entries created/edited offline
  *   deletes    - tombstones (never resurrected)
+ *   grammarStages - grammar progression updates from practice (last-writer-wins)
  *
  * Conflict rules (learning progress is never silently overwritten):
  *   - review events always merge (duplicates are no-ops);
@@ -17,7 +18,7 @@ import { handler, json, body, HttpError } from './lib/http.mjs';
 import { requireUser, ensureUserRow, languageFor } from './lib/identity.mjs';
 import { sql } from './lib/db.mjs';
 import { applyReviewEvent } from './lib/sync-core.mjs';
-import { normalizeTerm } from './lib/util.mjs';
+import { normalizeTerm, GRAMMAR_STAGES } from './lib/util.mjs';
 
 async function applyEntryUpsert(userId, upsert) {
   if (upsert == null || typeof upsert !== 'object') {
@@ -113,6 +114,7 @@ export default handler({
     const events = Array.isArray(data.events) ? data.events.slice(0, 500) : [];
     const entryUpserts = Array.isArray(data.entryUpserts) ? data.entryUpserts.slice(0, 500) : [];
     const deletes = Array.isArray(data.deletes) ? data.deletes.slice(0, 500) : [];
+    const grammarStages = Array.isArray(data.grammarStages) ? data.grammarStages.slice(0, 500) : [];
 
     const conflicts = [];
     let eventsApplied = 0;
@@ -140,11 +142,25 @@ export default handler({
       deletesApplied += 1;
     }
 
+    let grammarApplied = 0;
+    for (const st of grammarStages) {
+      const structureId = typeof st?.structure_id === 'string' ? st.structure_id.slice(0, 64) : null;
+      const stage = typeof st?.stage === 'string' ? st.stage.slice(0, 32) : null;
+      if (!structureId || !stage || !GRAMMAR_STAGES.includes(stage)) continue;
+      await sql()`
+        INSERT INTO user_data.grammar_progress (user_id, structure_id, stage, updated_at)
+        VALUES (${user.id}, ${structureId}, ${stage}, now())
+        ON CONFLICT (user_id, structure_id) DO UPDATE SET
+          stage = EXCLUDED.stage, updated_at = now()`;
+      grammarApplied += 1;
+    }
+
     return json({
       applied: {
         events: eventsApplied,
         entries: entryResults.applied,
         deletes: deletesApplied,
+        grammarStages: grammarApplied,
       },
       duplicates: eventsDuplicate,
       conflicts,

@@ -10,6 +10,22 @@ a hard requirement of the platform: **shared knowledge must never mix with user 
   profiles, collections + items, vocabulary entries, FSRS memory, review log, texts,
   reading progress, encounters, grammar progress, rate limits.
 
+Phase 2 additions (all applied idempotently by re-running the seed):
+- `knowledge.shared_texts.topic` — subject tag (classic, fable, poem, daily-life,
+  story, dialogue, letter, culture) used by Discover's topic filter.
+- `user_data.texts.topic` — the same tag for your own texts.
+- `user_data.texts.audio_url` — listening environment: a REFERENCE to audio at its
+  source (https URL, licence asserted by the user). Audio is never stored in the
+  database as a binary blob.
+- `user_data.rate_limits.window_day` — the column was renamed from `window`,
+  which is a reserved keyword in PostgreSQL and broke the original
+  `CREATE TABLE` on real databases (caught by validating the SQL against
+  embedded Postgres in `scripts/validate-seed.mjs`).
+
+`POST /api/import` restores a backup with merge rules that never overwrite
+newer learning progress (see netlify/functions/import.mjs for the exact
+conflict semantics; skipped items are reported, not silently dropped).
+
 ## Status model (how a collection item / entry is classified)
 
 Statuses reflect **demonstrated performance**, never "the card was opened":

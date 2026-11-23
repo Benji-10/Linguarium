@@ -4,8 +4,8 @@
  * Every text shows its provenance badge and an estimated band computed
  * from YOUR knowledge state (automated analysis, transparently explained),
  * so material choice is never driven by a CEFR sticker on the text.
- * The phase 2 content pipeline (real content ingestion, community feeds)
- * is documented in docs/ROADMAP.md.
+ * The phase 2 content additions: subject-tag filtering of the library and
+ * links into the same-knowledge-state practice environments.
  */
 
 import { icon, esc, spinner, emptyState, provenanceBadge, bandBadge } from '../ui/components.mjs';
@@ -13,6 +13,8 @@ import { getState, setState, tokenizerFor, languageName } from '../core/store.mj
 import { loadTexts } from '../core/data.mjs';
 import { scoreText } from '../shared/difficulty.mjs';
 import { DIFFICULTY_MODES } from '../shared/constants.mjs';
+
+const TOPIC_FILTER = { value: null };
 
 export async function renderDiscover(container) {
   container.innerHTML = `${spinner('Loading the library')}`;
@@ -52,7 +54,16 @@ export async function renderDiscover(container) {
 
   const userTexts = (state.texts ?? []).filter((t) => !activeLang || t.language_code === activeLang);
 
+  // Topic filter (phase 2): subject tags on the seeded material + your own.
+  // The selection lives module-level so it survives re-renders.
+  const topics = [...new Set([...state.sharedTexts ?? [], ...state.texts ?? []]
+    .filter((t) => !activeLang || t.language_code === activeLang)
+    .map((t) => t.topic)
+    .filter(Boolean))];
+  const topicFilter = TOPIC_FILTER.value;
+
   const row = (t, kind) => {
+    if (topicFilter && t.topic !== topicFilter) return '';
     const tok = tokenizerFor(state.languages, t.language_code) ?? {};
     const d = scoreText({ text: t.body ?? '', tokenizer: tok, knownSet });
     const matches = d.band === mode;
@@ -63,6 +74,7 @@ export async function renderDiscover(container) {
         <span class="muted small">${esc(languageName(state.languages, t.language_code))}${t.author ? ` - ${esc(t.author)}` : ''}</span>
       </a>
       <div class="discover-side">
+        ${t.topic ? `<span class="badge neutral">${esc(t.topic)}</span>` : ''}
         ${provenanceBadge(t.provenance)}
         ${bandBadge(d.band)}
         <span class="muted small">${Math.round(d.familiarity * 100)}% familiar</span>
@@ -86,6 +98,14 @@ export async function renderDiscover(container) {
       <div class="panel-head"><h2>Recommended for your mode</h2>
         <span class="muted small">${esc(DIFFICULTY_MODES[mode].description)}</span></div>
       ${
+        topics.length > 0
+          ? `<div class="topic-chips">
+              <button class="chip topic ${topicFilter === null ? 'active' : ''}" data-topic="">all topics</button>
+              ${topics.map((t) => `<button class="chip topic ${topicFilter === t ? 'active' : ''}" data-topic="${esc(t)}">${esc(t)}</button>`).join('')}
+            </div>`
+          : ''
+      }
+      ${
         sharedWithBodies.length + userTexts.length === 0
           ? emptyState({
               iconName: 'compass',
@@ -100,10 +120,17 @@ export async function renderDiscover(container) {
     </section>
 
     <section class="panel roadmap-note">
-      <h2>${icon('info')}What arrives in phase 2</h2>
-      <p class="muted small">Community content feeds, frequency-based familiarity scoring, subject-tag filtering and automated adaptation of texts you choose - see docs/ROADMAP.md. The scoring hooks for frequency and subject familiarity are already in place (src/shared/difficulty.mjs).</p>
+      <h2>${icon('info')}Where this grows next</h2>
+      <p class="muted small">The shared library grows through the community content pipeline (phase 3); frequency-based familiarity is already scored when frequency data is present. Meanwhile the same knowledge state also powers <a href="#/listening">listening</a>, <a href="#/practice">writing practice</a> and <a href="#/grammar">grammar exercises</a>.</p>
     </section>
   `;
+
+  container.querySelectorAll('[data-topic]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      TOPIC_FILTER.value = btn.dataset.topic || null;
+      renderDiscover(container);
+    });
+  });
 
   return () => {};
 }

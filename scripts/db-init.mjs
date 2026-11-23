@@ -66,7 +66,7 @@ let totals = { applied: 0, skipped: 0 };
 if (dryRun) {
   for (const file of files) {
     const stmts = splitSql(await loadSql(file));
-    const bad = stmts.filter((s) => !/^(CREATE|ALTER|INSERT|DROP|GRANT|REVOKE|SET|COMMENT|WITH|DO)\b/i.test(s));
+    const bad = stmts.filter((s) => !/^(CREATE|ALTER|INSERT|UPDATE|DELETE|DROP|GRANT|REVOKE|SET|COMMENT|WITH|DO)\b/i.test(s));
     console.log(`  ${file}: ${stmts.length} statements`);
     for (const s of stmts) {
       const first = s.split(/\s+/).slice(0, 6).join(' ');

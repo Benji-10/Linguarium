@@ -63,6 +63,16 @@ async function main() {
     navigator.serviceWorker.register('/sw.js').catch((err) => {
       console.warn('[pwa] service worker registration failed', err);
     });
+    // Background Sync wake-up (phase 2): the SW tells us connectivity is back
+    // even when the window 'online' event was missed (e.g. tab backgrounded).
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data?.type === 'flush-queue') {
+        setState({ online: navigator.onLine });
+        if (navigator.onLine) {
+          flushQueue({ silent: true }).then(() => refreshQueueCount());
+        }
+      }
+    });
   }
 }
 

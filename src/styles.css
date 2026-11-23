@@ -82,6 +82,25 @@
 
 * { box-sizing: border-box; }
 
+/*
+ * Global icon sizing (bug fix).
+ *
+ * Every icon() emits <svg class="icon" viewBox="0 0 24 24"> with NO width/height
+ * attributes, so the size always comes from CSS. Most call sites had contextual
+ * rules, but a few (e.g. .roadmap-note h2 on Discover, the offline banner in
+ * Review, the ai-off note in Knowledge) had none — and an unsized SVG defaults
+ * to ~300px, which is exactly the "massive I / massive circle" bug reported on
+ * Discover and Dashboard. Placed BEFORE all component rules so the contextual
+ * sizes below (.btn svg, .stat-icon svg, ...) keep overriding it.
+ */
+svg.icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  vertical-align: -3px;
+}
+svg.icon.large { width: 34px; height: 34px; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -441,6 +460,26 @@ textarea { resize: vertical; }
 .tok.known { color: var(--pos); }
 .tok:hover { background: var(--accent-soft); }
 
+/* ---- listening mode (phase 2) ---- */
+.sent { border-radius: 4px; }
+.sent.listening {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.listen-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  justify-content: center;
+  max-width: 720px; margin: -6px auto 14px;
+}
+.listen-bar .icon-btn { transform: rotate(-90deg); }
+.listen-bar #listen-next { transform: rotate(90deg); }
+.listen-note-panel {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--bg-raised); padding: 14px 16px;
+  max-width: 720px; margin: 0 auto 18px;
+}
+.listen-note-panel > div:first-child { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+
 .word-panel {
   position: fixed; right: 18px; bottom: 18px;
   width: 340px; max-width: calc(100vw - 24px);
@@ -625,3 +664,41 @@ textarea { resize: vertical; }
   .topbar { padding: 10px 14px; }
   .topbar-title { display: none; }
 }
+
+/* ---- phase 2: grammar exercises, writing practice ---- */
+.grammar-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; }
+.grammar-exercise .exercise-sentence {
+  font-family: var(--serif); font-size: 19px; line-height: 1.7;
+  background: var(--bg-raised); border: 1px solid var(--line);
+  border-radius: var(--radius-s); padding: 12px 14px; margin: 10px 0;
+}
+.cloze-blank {
+  background: var(--bg-sunken); border-radius: 4px; padding: 0 6px;
+  color: var(--ink-faint); font-weight: 600; letter-spacing: 2px;
+}
+.exercise-input { display: flex; gap: 8px; margin-top: 8px; }
+.exercise-input input { flex: 1; font-size: 17px; padding: 8px 10px; }
+.exercise-feedback { display: flex; gap: 8px; align-items: center; margin-top: 10px; padding: 8px 10px; border-radius: var(--radius-s); }
+.exercise-feedback.pos { background: var(--pos-soft); color: var(--pos); }
+.exercise-feedback.neg { background: var(--neg-soft); color: var(--neg); }
+.exercise-done { display: flex; gap: 10px; align-items: center; justify-content: center; padding: 20px 0; color: var(--pos); }
+
+.practice-prompt { font-family: var(--serif); font-size: 18px; line-height: 1.6; margin: 6px 0 10px; }
+.practice-answer-echo {
+  font-family: var(--serif); font-size: 17px; line-height: 1.7;
+  background: var(--bg-sunken); border-radius: var(--radius-s); padding: 10px 12px; margin: 8px 0;
+  white-space: pre-wrap;
+}
+.practice-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.practice-rate { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.structure-hint { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 10px 12px; margin: 10px 0; }
+.structure-hint summary { cursor: pointer; color: var(--accent); }
+.structure-examples { list-style: none; padding-left: 0; margin: 6px 0 0; }
+.structure-examples li { border-left: 3px solid var(--accent-soft); padding-left: 10px; margin-top: 6px; font-family: var(--mono); }
+.ai-feedback .correction { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 10px 12px; margin-top: 8px; }
+.corr-head { font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.corr-fix { display: flex; gap: 6px; align-items: center; margin-top: 6px; color: var(--pos); }
+.corr-head code, .corr-fix code { font-family: var(--mono); font-size: 13px; background: var(--bg-sunken); padding: 1px 5px; border-radius: 4px; }
+.topic-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 12px; }
+.chip.topic { cursor: pointer; }
+.chip.topic.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }

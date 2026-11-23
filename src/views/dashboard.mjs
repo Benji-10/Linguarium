@@ -152,8 +152,24 @@ function checkItem(done, text, hash) {
 }
 
 function readingListHtml(state) {
-  const texts = (state.texts ?? []).slice(0, 3);
-  if (texts.length === 0 && (state.sharedTexts ?? []).length === 0) {
+  // Only suggest texts in the active language — a Korean learner should not
+  // be pointed at the Latin and German starters (bug reported post-phase-1).
+  const lang = state.activeLanguage;
+  const mine = (state.texts ?? []).filter((t) => !lang || t.language_code === lang).slice(0, 3);
+  const sharedPool = (state.sharedTexts ?? []).filter((t) => !lang || t.language_code === lang);
+  if (mine.length === 0 && sharedPool.length === 0 && (state.sharedTexts ?? []).length > 0) {
+    const other = (state.sharedTexts ?? []).find((t) => t.language_code !== lang);
+    return emptyState({
+      iconName: 'book',
+      title: 'Nothing to read in this language yet',
+      message: other
+        ? `The shared library has starters in other languages only. Add a ${languageTitle(state, lang)} text, or read one below.`
+        : 'Paste or upload a text, or pick one from the shared starter library.',
+      actionHtml: `<a class="btn" href="#/reading">Add a text</a>` +
+        (other ? `<a class="btn subtle" href="#/read/shared/${esc(other.id)}">Read: ${esc(other.title)}</a>` : ''),
+    });
+  }
+  if (mine.length === 0 && sharedPool.length === 0) {
     return emptyState({
       iconName: 'book',
       title: 'Nothing to read yet',
@@ -161,13 +177,13 @@ function readingListHtml(state) {
       actionHtml: '<a class="btn" href="#/reading">Add a text</a>',
     });
   }
-  const rows = texts.map(
+  const rows = mine.map(
     (t) => `<a class="reading-row" href="#/read/user/${esc(t.id)}">
       <strong>${esc(t.title)}</strong>
       <span class="muted small">${esc(languageTitle(state, t.language_code))}${t.author ? ` - ${esc(t.author)}` : ''}</span>
     </a>`,
   );
-  const shared = (state.sharedTexts ?? []).slice(0, 2).map(
+  const shared = sharedPool.slice(0, 2).map(
     (t) => `<a class="reading-row shared" href="#/read/shared/${esc(t.id)}">
       <strong>${esc(t.title)}</strong>
       <span class="muted small">${esc(languageTitle(state, t.language_code))} - shared starter library</span>

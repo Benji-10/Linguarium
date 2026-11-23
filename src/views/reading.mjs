@@ -23,8 +23,14 @@ export async function renderReading(container) {
     setState({ textsLoaded: true });
   }
 
+  let sharedShowAll = false;
+
   const draw = () => {
     const s = getState();
+    const activeLang = s.activeLanguage;
+    const sharedForLang = (s.sharedTexts ?? []).filter(
+      (t) => !activeLang || sharedShowAll || t.language_code === activeLang,
+    );
     container.innerHTML = `
       <section class="page-head">
         <div>
@@ -47,10 +53,21 @@ export async function renderReading(container) {
 
       <section class="panel">
         <div class="panel-head"><h2>Shared starter library</h2>
-          <span class="muted small">public-domain classics and demo content</span></div>
-        ${textRowsHtml(s.sharedTexts ?? [], 'shared')}
+          <span class="muted small">${
+            activeLang
+              ? sharedShowAll
+                ? 'all languages'
+                : `${esc(languageName(s.languages, activeLang))} · ${sharedForLang.length} of ${(s.sharedTexts ?? []).length}`
+              : 'public-domain classics and demo content'
+          }</span>
+          ${activeLang ? `<button class="btn subtle small" id="shared-lang-toggle">${icon('globe')}${sharedShowAll ? 'Only my language' : 'All languages'}</button>` : ''}</div>
+        ${textRowsHtml(s.sharedTexts ?? [], 'shared', { showAll: sharedShowAll })}
       </section>
     `;
+    container.querySelector('#shared-lang-toggle')?.addEventListener('click', () => {
+      sharedShowAll = !sharedShowAll;
+      draw();
+    });
     container.querySelector('#btn-add-text')?.addEventListener('click', openAddText);
     container.querySelectorAll('[data-delete]').forEach((btn) =>
       btn.addEventListener('click', async () => {
@@ -148,11 +165,11 @@ export async function renderReading(container) {
   return () => {};
 }
 
-function textRowsHtml(texts, kind) {
+function textRowsHtml(texts, kind, { showAll = false } = {}) {
   const state = getState();
-  const activeLang = kind === 'user' ? state.activeLanguage : null;
+  const activeLang = state.activeLanguage;
   const rows = texts
-    .filter((t) => !activeLang || t.language_code === activeLang)
+    .filter((t) => !activeLang || showAll || t.language_code === activeLang)
     .map((t) => {
       const langName = languageName(state.languages, t.language_code);
       return `
@@ -169,7 +186,9 @@ function textRowsHtml(texts, kind) {
     })
     .join('');
   if (!rows) {
-    return `<p class="muted small" style="margin:8px 0">No texts for the active language. Add one above.</p>`;
+    return `<p class="muted small" style="margin:8px 0">No ${kind === 'user' ? '' : 'shared '}texts${
+      activeLang && !showAll ? ` for ${esc(languageName(state.languages, activeLang))}` : ''
+    }. ${kind === 'user' ? 'Add one above.' : 'Switch the language filter or add your own.'}</p>`;
   }
   return `<div class="text-rows" data-kind="${kind}">${rows}</div>`;
 }

@@ -25,14 +25,14 @@ export default handler({
     if (q.id && (q.kind === 'user' || q.kind === 'shared')) {
       if (q.kind === 'user') {
         const rows = await sql()`
-          SELECT id, user_id, language_code, title, body, author, source_url, license, adaptation_note, provenance, created_at, updated_at
+          SELECT id, user_id, language_code, title, body, author, source_url, license, adaptation_note, provenance, topic, audio_url, created_at, updated_at
           FROM user_data.texts
           WHERE id = ${q.id} AND user_id = ${user.id} AND deleted_at IS NULL`;
         if (rows.length === 0) throw new HttpError(404, 'not-found', 'Text not found.');
         return json({ text: rows[0] });
       }
       const rows = await sql()`
-        SELECT id, language_code, title, body, author, source_url, license, adaptation_note, provenance, source_ref, created_at
+        SELECT id, language_code, title, body, author, source_url, license, adaptation_note, provenance, source_ref, topic, created_at
         FROM knowledge.shared_texts
         WHERE id = ${q.id}`;
       if (rows.length === 0) throw new HttpError(404, 'not-found', 'Shared text not found.');
@@ -40,13 +40,13 @@ export default handler({
     }
 
     const mine = await sql()`
-      SELECT id, language_code, title, author, source_url, license, adaptation_note, provenance,
+      SELECT id, language_code, title, author, source_url, license, adaptation_note, provenance, topic, audio_url,
              length(body)::int AS body_length, created_at, updated_at
       FROM user_data.texts
       WHERE user_id = ${user.id} AND deleted_at IS NULL
       ORDER BY updated_at DESC`;
     const shared = await sql()`
-      SELECT id, language_code, title, author, source_url, license, adaptation_note, provenance, source_ref,
+      SELECT id, language_code, title, author, source_url, license, adaptation_note, provenance, source_ref, topic,
              length(body)::int AS body_length, created_at
       FROM knowledge.shared_texts
       ORDER BY created_at`;
@@ -65,6 +65,13 @@ export default handler({
     const sourceUrl = requireString(data, 'source_url', { max: 1000, optional: true });
     const license = requireString(data, 'license', { max: 40, optional: true }) ?? 'unspecified';
     const adaptationNote = requireString(data, 'adaptation_note', { max: 2000, optional: true });
+    const topic = requireString(data, 'topic', { max: 40, optional: true });
+    // Listening environment: audio stays a REFERENCE (URL + its own licensing,
+    // user-asserted) - never a binary blob in the database.
+    const audioUrl = requireString(data, 'audio_url', { max: 1000, optional: true });
+    if (audioUrl && !/^https:\/\//.test(audioUrl)) {
+      throw new HttpError(400, 'invalid-param', 'audio_url must be an absolute https URL.');
+    }
 
     const langExists = await sql()`
       SELECT code FROM knowledge.languages
@@ -75,10 +82,10 @@ export default handler({
 
     const rows = await sql()`
       INSERT INTO user_data.texts
-        (user_id, language_code, title, body, author, source_url, license, adaptation_note, provenance)
+        (user_id, language_code, title, body, author, source_url, license, adaptation_note, provenance, topic, audio_url)
       VALUES
-        (${user.id}, ${language}, ${title}, ${textBody}, ${author}, ${sourceUrl}, ${license}, ${adaptationNote}, 'user-imported')
-      RETURNING id, user_id, language_code, title, body, author, source_url, license, adaptation_note, provenance, created_at, updated_at`;
+        (${user.id}, ${language}, ${title}, ${textBody}, ${author}, ${sourceUrl}, ${license}, ${adaptationNote}, 'user-imported', ${topic}, ${audioUrl})
+      RETURNING id, user_id, language_code, title, body, author, source_url, license, adaptation_note, provenance, topic, audio_url, created_at, updated_at`;
     return json({ text: rows[0] }, 201);
   },
 

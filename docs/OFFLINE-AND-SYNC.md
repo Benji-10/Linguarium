@@ -35,10 +35,22 @@ Actions made offline (review events, entry edits, deletions) are queued in Index
 
 Settings → Your data → **Export backup** downloads everything (see the format in
 docs/DATABASE.md) as a single documented JSON file. Collection-level CSV/JSON export
-lives in each collection. The backup is yours to keep, parse or re-import elsewhere:
+lives in each collection. The backup is yours to keep, parse or re-import elsewhere
+(Settings → Import backup; the import merges — unknown items are restored, anything
+already present keeps its current state, and skipped items are reported):
 there is no lock-in.
 
 ## Deleting local data
 
 Settings → Offline & sync → **Clear local cache** removes the IndexedDB stores on the
 device only (server data untouched; it re-caches on next load).
+
+## Background Sync (phase 2)
+
+Whenever an offline action is queued, the app also registers a Background Sync
+tag (`linguarium-flush`) with the service worker where the browser supports it.
+When connectivity returns, the service worker wakes the open app and the queue
+flushes — even if the window's `online` event was missed (a backgrounded tab, for
+example). Where Background Sync is unavailable, the `online` listener and the
+Sync button keep working exactly as before. Queue contents never change: the
+same events, the same conflict rules.
