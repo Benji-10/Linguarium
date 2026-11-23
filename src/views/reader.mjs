@@ -15,7 +15,7 @@
  * - Position is saved continuously; reading works offline via the cache.
  */
 
-import { icon, raw, esc, toast, spinner, provenanceBadge, statusBadge } from '../ui/components.mjs';
+import { icon, raw, esc, toast, modal, spinner, provenanceBadge, statusBadge } from '../ui/components.mjs';
 import { getState, setState, tokenizerFor, languageName, isRightToLeft } from '../core/store.mjs';
 import { api } from '../core/api.mjs';
 import { navigate } from '../core/router.mjs';
@@ -104,6 +104,7 @@ export async function renderReader(container, params) {
           ${icon('info')}Estimated: ${DIFFICULTY_MODES[difficulty.band]?.label ?? difficulty.band}
         </span>
         <button class="btn subtle" id="btn-breakdown">${icon('info')}Why this estimate?</button>
+        <button class="btn subtle" id="btn-adapt" title="Adapt this text to your level (phase 3, AI)">${icon('wand')}Adapt</button>
         <a class="btn subtle" href="#/reading">${icon('x')}Close</a>
       </div>
     </section>
@@ -134,6 +135,81 @@ export async function renderReader(container, params) {
 
   const body = container.querySelector('#reader-body');
   renderTokens(body, text.body ?? '', tokenizer, classify, rtl);
+
+  // Automatic adaptation (phase 3): re-level THIS text toward a target band
+  // computed against the learner's own knowledge state. The result is stored
+  // as a new ADAPTED user text that keeps the original work's metadata and
+  // carries an honest adaptation note; provenance 'ai', never 'verified'.
+  container.querySelector('#btn-adapt')?.addEventListener('click', () => openAdaptModal());
+
+  const openAdaptModal = () => {
+    const ai = getState().aiStatus ?? { available: false };
+    const bands = ['comfortable', 'stretch', 'challenge'];
+    // Suggest one band easier than the current estimate by default.
+    const suggest = bands[Math.max(0, bands.indexOf(difficulty.band) - 1)] ?? 'comfortable';
+    if (!ai.available) {
+      modal({
+        title: 'Text adaptation is not configured',
+        bodyHtml: `
+          <p>This deployment has no <code>GEMINI_API_KEY</code>, so the optional AI adapter is disabled - reading, review and everything else work exactly as before.</p>
+          <p class="muted small">Adaptation is an optional feature by design (see Settings - Privacy / the AI policy): it needs a configured key and is always provenance-labelled 'ai'.</p>`,
+        actionsHtml: '<button class="btn subtle" data-close>Close</button>',
+      });
+      return;
+    }
+    const m = modal({
+      title: 'Adapt this text',
+      bodyHtml: `
+        <p>Simplify or re-level <strong>${esc(text.title)}</strong> toward a target difficulty band, computed against <strong>your</strong> current knowledge state (currently ${Math.round(difficulty.familiarity * 100)}% familiar, estimated ${DIFFICULTY_MODES[difficulty.band]?.label ?? difficulty.band}).</p>
+        <p class="muted small">The adaptation is written by <code>gemini-3.1-flash-lite</code> and stored as a NEW text in your library: provenance <span class="badge warn">ai</span>, the original's author, source and license stay attached, and an adaptation note describes what changed. The original text is never modified.</p>
+        <label>Target band
+          <select id="adapt-band">
+            ${bands
+              .map((b) => `<option value="${b}" ${b === suggest ? 'selected' : ''}>${DIFFICULTY_MODES[b].label} - ${DIFFICULTY_MODES[b].description.toLowerCase()}</option>`)
+              .join('')}
+          </select>
+        </label>
+        <p class="muted small">Long texts (over 12,000 characters) are too long for one adaptation pass - split them first if needed.</p>`,
+      actionsHtml: `<button class="btn subtle" data-close>Cancel</button><button class="btn primary" id="adapt-go">${icon('wand')}Adapt this text</button>`,
+    });
+    m.el.querySelector('[data-close]').addEventListener('click', m.close);
+    m.el.querySelector('#adapt-go').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.innerHTML = `${icon('wand')}Adapting...`;
+      // Hints computed from THIS text against the learner's known terms: the
+      // model keeps known terms and works around the unknown ones.
+      const freq = new Map();
+      for (const t of tokens) {
+        const norm = normalizeTerm(t.text, tokenizer);
+        if (!norm) continue;
+        freq.set(norm, (freq.get(norm) ?? 0) + 1);
+      }
+      const ranked = [...freq.entries()].sort((a, b) => b[1] - a[1]);
+      const knownTerms = ranked.filter(([t]) => knownSet.has(t)).slice(0, 150).map(([t]) => t);
+      const unknownTerms = ranked.filter(([t]) => !knownSet.has(t)).slice(0, 150).map(([t]) => t);
+      try {
+        const data = await api('/api/adapt', {
+          method: 'POST',
+          body: {
+            text_id: id,
+            kind,
+            target_band: m.el.querySelector('#adapt-band').value,
+            known_terms: knownTerms,
+            unknown_terms: unknownTerms,
+            familiarity: difficulty.familiarity,
+          },
+        });
+        m.close();
+        toast('Adapted copy saved to your library - compare it with the original any time.', 'pos');
+        navigate(`#/read/user/${data.text.id}`);
+      } catch (err) {
+        btn.disabled = false;
+        btn.innerHTML = `${icon('wand')}Adapt this text`;
+        toast(err.message ?? 'The adaptation failed. The original text is untouched.', 'neg');
+      }
+    });
+  };
 
   // Listening environment (phase 2) --------------------------------------------------
   // Audio referenced by URL plays through a plain <audio> element (never
@@ -317,7 +393,7 @@ export async function renderReader(container, params) {
   const selfAssess = async (termRaw, norm, entry, rating) => {
     // An honest first review: a self-assessment of existing knowledge,
     // logged as a normal review event (nothing is ever silently "mastered").
-    const { review } = await import('../shared/fsrs.mjs');
+    const { review, retentionFor } = await import('../shared/fsrs.mjs');
     const { enqueue, upsertCachedEntry, getCachedEntries } = await import('../core/idb.mjs');
     let current = entry;
     if (!current) {
@@ -329,7 +405,9 @@ export async function renderReader(container, params) {
       entriesByNorm.set(norm, current);
     }
     const memory = current.memories?.recognition ?? null;
-    const result = review(memory, rating, Date.now());
+    // Phase 3: the recognition-dimension target retention of this language profile.
+    const profile = (getState().profiles ?? []).find((p) => p.language_code === language);
+    const result = review(memory, rating, Date.now(), { retention: retentionFor(profile, 'recognition') });
     const updated = {
       ...current,
       memories: { ...(current.memories ?? {}), recognition: { ...result.memory } },

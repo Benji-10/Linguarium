@@ -24,6 +24,15 @@ import { normalizeTerm } from './lib/util.mjs';
 
 const DIMENSIONS = ['recognition', 'recall', 'production'];
 
+const clampRet = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(0.97, Math.max(0.7, n)) : 0.9;
+};
+const clampLimit = (v) => {
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 1 && n <= 999 ? n : null;
+};
+
 export default handler({
   POST: async (req) => {
     const user = await requireUser();
@@ -46,8 +55,13 @@ export default handler({
         continue;
       }
       const res = await sql()`
-        INSERT INTO user_data.language_profiles (user_id, language_code, difficulty_mode, gloss_language)
-        VALUES (${user.id}, ${p.language_code}, ${typeof p.difficulty_mode === 'string' ? p.difficulty_mode : 'stretch'}, 'en')
+        INSERT INTO user_data.language_profiles
+          (user_id, language_code, difficulty_mode, gloss_language,
+           retention_recognition, retention_recall, retention_production, daily_new_limit, daily_review_limit)
+        VALUES (${user.id}, ${p.language_code}, ${typeof p.difficulty_mode === 'string' ? p.difficulty_mode : 'stretch'},
+                ${typeof p.gloss_language === 'string' ? p.gloss_language.slice(0, 16) : 'en'},
+                ${clampRet(p.retention_recognition)}, ${clampRet(p.retention_recall)}, ${clampRet(p.retention_production)},
+                ${clampLimit(p.daily_new_limit)}, ${clampLimit(p.daily_review_limit)})
         ON CONFLICT (user_id, language_code) DO NOTHING
         RETURNING id`;
       if (res.length > 0) counts.profiles += 1;
@@ -187,6 +201,19 @@ export default handler({
           stage = EXCLUDED.stage, updated_at = now()
         WHERE user_data.grammar_progress.stage = 'encountered' AND EXCLUDED.stage <> 'encountered'`;
       counts.grammar += 1;
+    }
+
+    // --- fitted FSRS weights (only when this account has none yet) ---
+    const w = data.fsrs_weights;
+    if (w && Array.isArray(w.weights) && w.weights.length === 19 && w.weights.every((x) => Number.isFinite(x) && x > 0)) {
+      await sql()`
+        INSERT INTO user_data.fsrs_weights (user_id, weights, trained_at, review_count, loss_default, loss_optimized)
+        VALUES (${user.id}, ${JSON.stringify(w.weights.map((x) => Number(x)))}::jsonb,
+                ${typeof w.trained_at === 'string' ? w.trained_at : new Date().toISOString()},
+                ${Number.isFinite(Number(w.review_count)) ? Math.max(0, Math.round(Number(w.review_count))) : 0},
+                ${Number.isFinite(Number(w.loss_default)) ? Number(w.loss_default) : null},
+                ${Number.isFinite(Number(w.loss_optimized)) ? Number(w.loss_optimized) : null})
+        ON CONFLICT (user_id) DO NOTHING`;
     }
 
     return json({

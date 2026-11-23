@@ -45,3 +45,17 @@ Only what is needed to run the learning experience, in **your own Neon database*
 - Soft-deleted entries/texts are tombstoned (sync-safe) and excluded everywhere.
 - Review history is kept until account deletion; the backup export includes it so
   nothing is lost when you leave.
+
+## Phase 3 additions to the statement
+
+- **Text adaptation** (optional AI): when you adapt a text, the model receives that
+  single text plus two short term lists derived from it. It never receives any other
+  user data; the result is stored as your own (adapted) text.
+- **FSRS fitting**: runs server-side on your own review log, in your own database;
+  the fitted parameters are stored with it and travel in your export. Nothing is
+  shared with anyone.
+- **Contributions**: your submission references your account id so you can see its
+  moderation status; the shared tables that everyone reads never contain user ids.
+  Nothing about you is published.
+- The theme/skin and fitted-parameter preferences live in localStorage (UI
+  preferences only, no learning data).

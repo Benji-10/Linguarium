@@ -28,8 +28,9 @@ export default handler({
     const user = await requireUser();
     const uid = user.id;
 
-    const [profiles, collectionsRaw, texts, grammarProgress, readingProgress] = await Promise.all([
-      sql()`SELECT language_code, difficulty_mode, gloss_language, active, created_at, updated_at
+    const [profiles, collectionsRaw, texts, grammarProgress, readingProgress, weightsRows] = await Promise.all([
+      sql()`SELECT language_code, difficulty_mode, gloss_language, active, created_at, updated_at,
+                   retention_recognition, retention_recall, retention_production, daily_new_limit, daily_review_limit
             FROM user_data.language_profiles WHERE user_id = ${uid} ORDER BY created_at`,
       sql()`SELECT id, language_code, name, description, source_type, source_url, license, created_at, updated_at
             FROM user_data.collections WHERE user_id = ${uid} ORDER BY created_at`,
@@ -38,6 +39,8 @@ export default handler({
             FROM user_data.texts WHERE user_id = ${uid} AND deleted_at IS NULL ORDER BY created_at`,
       sql()`SELECT structure_id, stage, updated_at FROM user_data.grammar_progress WHERE user_id = ${uid}`,
       sql()`SELECT text_kind, text_id, position, last_read_at FROM user_data.reading_progress WHERE user_id = ${uid}`,
+      sql()`SELECT weights, trained_at, review_count, loss_default, loss_optimized
+            FROM user_data.fsrs_weights WHERE user_id = ${uid}`,
     ]);
 
     // Collection items for all owned collections.
@@ -141,6 +144,16 @@ export default handler({
       reading_progress: readingProgress.map((p) => ({ ...p, position: parseJson(p.position, {}) })),
       grammar_progress: grammarProgress,
       encounters: encounters[0] ?? { total: 0, last_30_days: 0 },
+      fsrs_weights:
+        weightsRows.length > 0
+          ? {
+              weights: parseJson(weightsRows[0].weights, null),
+              trained_at: weightsRows[0].trained_at,
+              review_count: weightsRows[0].review_count,
+              loss_default: weightsRows[0].loss_default,
+              loss_optimized: weightsRows[0].loss_optimized,
+            }
+          : null,
     };
 
     const stamp = new Date().toISOString().slice(0, 10);

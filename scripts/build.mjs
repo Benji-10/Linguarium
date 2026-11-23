@@ -65,6 +65,7 @@ export const SEED_SQL = ${escape(seedSql)};
     ['icons/icon-192.png', 'icons/icon-192.png'],
     ['icons/icon-512.png', 'icons/icon-512.png'],
     ['icons/icon-512-maskable.png', 'icons/icon-512-maskable.png'],
+    ['icons/apple-touch-icon.png', 'icons/apple-touch-icon.png'],
   ];
   for (const [src, dest] of files) {
     await cp(p(src), p(`dist/${dest}`));

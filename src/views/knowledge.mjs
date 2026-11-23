@@ -71,7 +71,9 @@ export async function renderKnowledge(container, params) {
               .map((st) => `<option value="${st}" ${st === statusFilter ? 'selected' : ''}>${esc(st.replace('_', ' '))}</option>`)
               .join('')}
           </select>
+          <button class="btn subtle" id="k-lexicon" title="Look up the exact search term in the community-maintained shared lexicon">${icon('users')}Shared lexicon</button>
         </div>
+        <div id="k-lexicon-results"></div>
         ${
           filtered.length === 0
             ? emptyState({
@@ -102,6 +104,29 @@ export async function renderKnowledge(container, params) {
       draw();
     });
     container.querySelector('#btn-add-entry').addEventListener('click', () => openAddEntry(language));
+
+    // Phase 3: exact-term lookup in the shared community lexicon (provenance
+    // 'community', never 'verified' - always labelled, always separable from
+    // the user's own entries above).
+    container.querySelector('#k-lexicon')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const host = container.querySelector('#k-lexicon-results');
+      if (!host || !language || !query.trim()) {
+        if (host) host.innerHTML = '';
+        if (!query.trim()) toast('Type a term in the search box first, then look it up.', 'info');
+        if (!language) toast('Pick a single language first (the shared lexicon is per language).', 'info');
+        return;
+      }
+      btn.disabled = true;
+      host.innerHTML = spinner('Looking up the shared lexicon');
+      try {
+        const data = await api('/api/lexicon', { params: { language_code: language, term: query.trim() } });
+        host.innerHTML = renderLexiconResults(data.entries ?? [], language);
+      } catch (err) {
+        host.innerHTML = `<p class="muted small">Lookup failed: ${esc(err.message ?? 'offline')}.</p>`;
+      }
+      btn.disabled = false;
+    });
 
     container.querySelectorAll('[data-entry]').forEach((row) =>
       row.addEventListener('click', () => {
@@ -353,4 +378,41 @@ export async function renderKnowledge(container, params) {
 
   draw();
   return () => {};
+}
+
+/**
+ * Shared community lexicon results (phase 3).
+ * Rendered strictly separate from the user's own entries: every row carries
+ * the 'community' provenance badge, its license and its source link.
+ */
+function renderLexiconResults(rows, language) {
+  if (!rows || rows.length === 0) {
+    return `
+      <div class="lexicon-lookup">
+        <div class="panel-head"><h3>${icon('users')}Shared lexicon</h3></div>
+        <p class="muted small">Nothing in the shared community lexicon for this exact term. You can <a href="#/contribute">contribute a definition</a> - it enters the shared lexicon only after moderation.</p>
+      </div>`;
+  }
+  return `
+    <div class="lexicon-lookup">
+      <div class="panel-head"><h3>${icon('users')}Shared lexicon <span class="muted small">(community-maintained, unverified)</span></h3></div>
+      <div class="lexicon-rows">
+        ${rows
+          .map(
+            (r) => `
+        <div class="lexicon-row">
+          <div class="lexicon-term mono">${esc(r.term)}</div>
+          <div class="lexicon-def">${esc(r.definition)}</div>
+          <div class="lexicon-side">
+            ${provenanceBadge(r.provenance)}
+            ${r.part_of_speech ? `<span class="badge outline">${esc(r.part_of_speech)}</span>` : ''}
+            ${r.license ? `<span class="badge neutral">${esc(r.license)}</span>` : ''}
+            ${r.source_url ? `<a class="muted small" href="${esc(r.source_url)}" target="_blank" rel="noopener noreferrer">source</a>` : ''}
+          </div>
+        </div>`,
+          )
+          .join('')}
+      </div>
+      <p class="muted small">Gloss language: ${esc(rows[0]?.gloss_language ?? 'en')}. These are community definitions, not your data - your own entry (if any) is listed above and stays separate.</p>
+    </div>`;
 }

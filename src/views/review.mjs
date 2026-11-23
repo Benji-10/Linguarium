@@ -15,7 +15,7 @@ import { icon, esc, toast, spinner, emptyState } from '../ui/components.mjs';
 import { getState, setState, tokenizerFor, languageName } from '../core/store.mjs';
 import { navigate } from '../core/router.mjs';
 import { api } from '../core/api.mjs';
-import { review as fsrsReview, memoryRetrievability, DESIRED_RETENTION } from '../shared/fsrs.mjs';
+import { review as fsrsReview, memoryRetrievability, DESIRED_RETENTION, retentionFor, usingCustomWeights } from '../shared/fsrs.mjs';
 import { deriveStatus } from '../shared/status.mjs';
 import { RATINGS, DIMENSIONS } from '../shared/constants.mjs';
 import { enqueue, upsertCachedEntry } from '../core/idb.mjs';
@@ -65,6 +65,11 @@ export async function renderReview(container) {
   const data = await load();
   const dueCount = (data.due ?? []).length;
   const newCount = (data.new ?? []).length;
+
+  // Phase 3: per-profile scheduling preferences.
+  const profile = (state.profiles ?? []).find((p) => p.language_code === language);
+  const retention = retentionFor(profile, dimension);
+  const scheduling = data.scheduling ?? null;
 
   const draw = () => {
     if (queue.length === 0) {
@@ -138,7 +143,13 @@ export async function renderReview(container) {
       </section>
 
       <section class="panel session-note">
-        <span class="muted small">Target retention ${Math.round(DESIRED_RETENTION * 100)}% (FSRS-5). ${
+        <span class="muted small">Target retention ${Math.round(retention * 100)}% for ${DIMENSIONS[dimension].label}${
+          profile && retention !== DESIRED_RETENTION ? ' (your per-dimension preference)' : ' (FSRS-5 default)'
+        }${usingCustomWeights() ? ' - scheduler running your fitted FSRS parameters' : ''}. ${
+          scheduling && scheduling.daily_review_limit != null
+            ? `Daily cap: ${scheduling.reviews_today}/${scheduling.daily_review_limit} reviews today${scheduling.new_today != null && scheduling.daily_new_limit != null ? `, ${scheduling.new_today}/${scheduling.daily_new_limit} new cards` : ''}.`
+            : ''
+        } ${
           getState().online ? '' : `${icon('offline').toString()} Working offline - results sync when you reconnect.`
         }</span>
       </section>
@@ -222,7 +233,7 @@ export async function renderReview(container) {
   };
 
   const rate = async (card, rating, opts = {}) => {
-    const result = fsrsReview(card.memory ?? null, rating, Date.now());
+    const result = fsrsReview(card.memory ?? null, rating, Date.now(), { retention });
     const event = {
       id: crypto.randomUUID(),
       entry_id: card.id,

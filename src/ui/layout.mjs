@@ -3,10 +3,11 @@
  * active-language selector, online/offline + sync indicator.
  */
 
-import { icon, esc } from './components.mjs';
+import { icon, esc, brandLogo } from './components.mjs';
 import { getState, setState, subscribe, setActiveLanguage } from '../core/store.mjs';
 import { navigate } from '../core/router.mjs';
 import { flushQueue, refreshQueueCount } from '../core/sync.mjs';
+import { currentMode, effectiveMode, toggleMode } from '../core/theme.mjs';
 
 const NAV_GROUPS = [
   {
@@ -34,6 +35,10 @@ const NAV_GROUPS = [
     ],
   },
   {
+    label: 'Community',
+    items: [{ hash: '#/contribute', icon: 'users', label: 'Contribute' }],
+  },
+  {
     label: 'System',
     items: [{ hash: '#/settings', icon: 'settings', label: 'Settings' }],
   },
@@ -44,7 +49,7 @@ export function renderLayout(root) {
     `<div class="shell">
       <aside class="sidebar">
         <div class="brand">
-          <span class="brand-mark">${icon('globe').toString()}</span>
+          <span class="brand-mark">${brandLogo().toString()}</span>
           <div class="brand-text"><strong>Linguarium</strong><small>universal language learning</small></div>
         </div>
         <nav id="side-nav">${navHtml()}</nav>
@@ -61,6 +66,7 @@ export function renderLayout(root) {
           <div class="topbar-title" id="topbar-title">Dashboard</div>
           <div class="topbar-actions">
             <span id="offline-pill"></span>
+            <button class="btn subtle icon-only" id="btn-theme" title="Switch light / dark theme (mode is in Settings)"></button>
             <button class="btn subtle" id="btn-sync" title="Flush the offline queue now">${icon('download')}<span>Sync</span></button>
             <div class="user-chip" id="user-chip"></div>
           </div>
@@ -86,6 +92,21 @@ export function renderLayout(root) {
     await flushQueue();
     await refreshQueueCount();
   });
+
+  // Quick theme toggle (light / dark; full mode + skin settings in Settings).
+  const themeBtn = root.querySelector('#btn-theme');
+  const renderThemeBtn = () => {
+    if (!themeBtn) return;
+    const dark = effectiveMode() === 'dark';
+    themeBtn.innerHTML = icon(dark ? 'sun' : 'moon').toString();
+    themeBtn.setAttribute('aria-label', dark ? 'Switch to the light theme' : 'Switch to the dark theme');
+  };
+  themeBtn?.addEventListener('click', () => {
+    toggleMode();
+    setState({ theme: currentMode() });
+    renderThemeBtn();
+  });
+  renderThemeBtn();
 
   const unsub = subscribe(() => updateChrome(root));
   updateChrome(root);

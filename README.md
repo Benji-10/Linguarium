@@ -8,12 +8,13 @@ all of it should share a single knowledge state for the learner, and that no lan
 > Working title. The name is a single constant in `src/main.mjs`'s companion files
 > (`src/ui/layout.mjs`, `manifest.webmanifest`) if you ever want to change it.
 
-Status: **Phase 1 and Phase 2 are implemented and tested.** Phase 3 remains
-planned (see [docs/ROADMAP.md](docs/ROADMAP.md)).
+Status: **Phases 1, 2 and 3 are implemented and tested.** The specification is
+fully covered (see [docs/ROADMAP.md](docs/ROADMAP.md) for what each phase
+shipped, including the honest edges).
 
 ---
 
-## What is in the box (phases 1 + 2)
+## What is in the box (all three phases)
 
 | Area | What works |
 | --- | --- |
@@ -32,6 +33,11 @@ planned (see [docs/ROADMAP.md](docs/ROADMAP.md)).
 | **Offline / PWA** | Installable, offline reading/review/lookup/practice via IndexedDB + service worker, change queue with conflict-safe sync (learning progress is never silently overwritten), Background Sync wake-up where supported, portable JSON backup **export and import** (merge rules, nothing newer overwritten). |
 | **AI (optional)** | Vocabulary enrichment via **Gemini `gemini-3.1-flash-lite`** — structured output, cached per term, daily per-user quota — plus optional writing-practice feedback (`/api/ai-check`), always labelled unverified. Without `GEMINI_API_KEY` every core feature still works; AI sections show as explicitly disabled. |
 | **Writing practice** | Prompts built from the words and grammar you are actually learning; free-text answers with honest self-assessment feeding the production dimension of FSRS through the same review pipeline as everything else. |
+| **Text adaptation (p3)** | One click in the reader re-levels a text toward a target difficulty band computed against **your** knowledge state (Gemini, optional). Stored as adapted content: the original's author/source/license intact, an adaptation note, provenance `ai` — never `verified`. The original is never modified. |
+| **Personalization (p3)** | Per-language, per-dimension target retention (0.70–0.97); optional daily caps for reviews and new cards — enforced server-side, reported honestly in the session. Optional FSRS-5 parameter refitting from your own review history (deterministic optimizer, ≥300 scored intervals, loss reported, fully reversible). |
+| **Community pipeline (p3)** | Contribute texts, grammar structures and lexicon entries with mandatory license + source fields; moderated via an admin key; approved items enter the shared tables as `community` provenance — never `verified`. The shared lexicon shows in Knowledge lookups, clearly separated from your data. |
+| **Language resources (p3)** | A curated catalog of open frequency lists, pronunciation references, corpora and dictionaries per language (Wiktionary/Wikipedia/Tatoeba per preset language + CMUdict, JMdict, CC-CEDICT, The Latin Library, Tekstaro, tokipona.org, FrequencyWords...), every entry with license metadata. Links only — data is never copied in. |
+| **Themes (p3)** | Light / dark / system mode with a topbar quick toggle, times six accent skins (teal, ocean, forest, rose, amber, violet) — every skin legible in both modes. A real icon set (book + speech-bubble mark) in SVG + PNG. The injected Netlify badge is hidden defensively. |
 
 ### Non-negotiable principles baked into the code
 
@@ -105,19 +111,29 @@ grammar catalog and language presets appear. Three equivalent ways, pick one:
   ever creates shared `knowledge` data and empty `user_data` tables — it can
   never touch user content. Without `ADMIN_KEY` the endpoint answers 404.
 - **Locally:** `cp .env.example .env`, fill `DATABASE_URL`, then `npm run db:init`
-  (schema + seed) or `npm run db:seed
-
-# Validate the SQL without any database (embedded Postgres, no connection):
-node scripts/validate-seed.mjs         # schema + seed apply cleanly, topics/grammar present
-node scripts/validate-phase2-sql.mjs   # the phase-2 statements run on real Postgres` (seed only, after schema creation).
+  (schema + seed) or `npm run db:seed` (seed only, after schema creation).
   `node scripts/db-init.mjs --dry-run` validates the SQL files without a database.
 - **In the Neon SQL editor:** paste the contents of `sql/schema.sql` followed by
   `sql/seed.sql`.
 
+Validate the SQL without any database (embedded Postgres, no connection):
+
+```bash
+node scripts/validate-seed.mjs         # schema + seed apply cleanly, topics/grammar present
+node scripts/validate-phase2-sql.mjs   # the phase-2 statements run on real Postgres
+node scripts/validate-phase3-sql.mjs   # phase-3 tables/columns, seeds and catalog coverage
+```
+
+Upgrading a database seeded before phase 3: re-run the same seed - it is
+idempotent (IF NOT EXISTS / ON CONFLICT), it only adds the personalization
+columns, the community tables, the shared lexicon starter entries and the
+resource catalog.
+
 The seed loads ~58 language presets, a shared reading library (public-domain
-  classics with full citations + demonstration texts) and a starter grammar catalog.
-Everything seeded carries provenance labels; `verified` entries cite the page they
-were transcribed from, `community` entries say exactly what they are.
+classics with full citations + demonstration texts), a starter grammar catalog,
+starter shared-lexicon entries and the open-resources catalog. Everything seeded
+carries provenance labels; `verified` entries cite the page they were
+transcribed from, `community` entries say exactly what they are.
 
 ### 4. Deploy on Netlify
 
@@ -139,9 +155,41 @@ were transcribed from, `community` entries say exactly what they are.
 3. Recommendation: keep **email confirmation** on (the app handles both flows).
 4. Optional: add OAuth providers (Google, GitHub, …). The custom login screen picks them up automatically.
 
+### 6. (Optional) remove the "powered by Netlify" badge
+
+Netlify injects a small badge iframe (`#nl-badge-frame`) into served HTML when the
+site badge is enabled. The app already hides it defensively (a CSS rule plus a
+runtime removal in `src/core/theme.mjs`), but the clean fix is to turn it off at
+the source: **Site configuration → Domain management → Netlify badge → disable**
+(older UI: Settings → Domain management → Netlify badge). Either way it never
+shows in your app.
+
+### 7. (Optional) moderate community contributions
+
+Phase 3 lets users submit texts, grammar structures and lexicon entries for the
+shared library (`#/contribute`). Submissions wait in a moderation queue; nothing
+is published without an approval. Moderation uses the same `ADMIN_KEY` you set
+in step 3 (constant-time compared; without the key the routes answer 404):
+
+```bash
+# list the pending queue (payloads included):
+curl https://<your-site>.netlify.app/api/contribute?pending=1 -H "x-admin-key: $ADMIN_KEY"
+
+# approve (inserts into the shared tables, provenance 'community'):
+curl -X PUT https://<your-site>.netlify.app/api/contribute      -H "x-admin-key: $ADMIN_KEY" -H "content-type: application/json"      -d '{"id": "<submission-uuid>", "action": "approve", "note": "license and source check out"}'
+
+# reject (with a note the contributor sees):
+curl -X PUT https://<your-site>.netlify.app/api/contribute      -H "x-admin-key: $ADMIN_KEY" -H "content-type: application/json"      -d '{"id": "<submission-uuid>", "action": "reject", "note": "no source; license unclear"}'
+```
+
+Check the license and provenance claims before approving - the same rules the seed
+data follows (docs/CONTENT.md). Approved items appear in Discover, Grammar and
+Knowledge for everyone, always labelled `community`, never `verified`.
+
 That's it — visit your site, create an account, add a language, import a word list,
 read something, review. The seeded shared library (public-domain classics + demo
-content) appears once the database has been populated (step 3).
+content), the shared lexicon starter entries and the resource catalog appear once
+the database has been populated (step 3).
 
 ## Local development
 
@@ -152,9 +200,10 @@ npm install                # esbuild, @netlify/identity, @neondatabase/serverles
 cp .env.example .env       # fill DATABASE_URL (local or Neon); GEMINI_API_KEY optional
 npm run db:init            # create schema + seed (npm run db:seed = seed only)
 
-# Upgrading a database seeded before phase 2:
+# Upgrading a database seeded before phase 2 or 3:
 # re-run the same command - the seed is idempotent (IF NOT EXISTS / ON CONFLICT),
-# it only adds the new texts, topics, grammar structures and columns.
+# it only adds the new texts, topics, grammar structures, personalization
+# columns, community tables, lexicon starter entries and resource catalog.
 npm run db:seed
 npm run dev                # netlify dev (via npx): dist + functions + local Identity
 ```
@@ -170,8 +219,10 @@ functions, `npm run dev:ui` builds and serves `dist` on port 3000.
 ## Testing and checks
 
 ```bash
-npm test     # 67 unit tests: FSRS-5 identities and behaviour, tokenizer, parsers,
-             # status thresholds, difficulty bands, offline merge rules, SQL splitter
+npm test     # 91 unit tests: FSRS-5 identities and behaviour, tokenizer, parsers,
+             # status thresholds, difficulty bands, offline merge rules, SQL splitter,
+             # the FSRS parameter fitter, retention-aware scheduling, contribution
+             # validation
 npm run check # node --check over every source and function file
 npm run build # esbuild bundle into dist/
 ```
@@ -183,19 +234,24 @@ npm run build # esbuild bundle into dist/
 ├── netlify.toml                               build & functions configuration (Node 22)
 ├── sql/schema.sql, sql/seed.sql               Neon schema (knowledge + user_data) and seeds
 ├── scripts/                                   build (incl. seed bundle), serve, db-init
-│                                              (schema / seed / --dry-run), syntax check
+│                                              (schema / seed / --dry-run), syntax check,
+│                                              SQL validators, render-icons.py (regenerates
+│                                              the PNG icon set from icons/icon.svg)
 ├── src/
 │   ├── shared/         pure learning logic: FSRS-5, tokenizer, status model,
 │   │                   difficulty estimation, import parsers, merge rules (all tested)
 │   ├── core/           auth (@netlify/identity), api client, store, router,
 │   │                   IndexedDB cache + offline queue, sync, data loaders
 │   ├── ui/             design system, components, app shell
-│   └── views/          dashboard, discover, reading, reader, review, practice (p2),
-│                       listening (p2), knowledge, grammar, collections, settings, auth
+│   └── views/          dashboard, discover, reading, reader, review, practice,
+│                       listening, knowledge, grammar, collections, contribute,
+│                       settings, auth
 └── netlify/functions/  v2 functions: identity guard, db access, all /api/* endpoints,
                          admin-seed (populates the DB, ADMIN_KEY gated),
-                         Gemini enrichment (cache + quota + honesty rules), sync, export,
-                         account deletion
+                         Gemini enrichment (cache + quota + honesty rules),
+                         ai-check (writing feedback), adapt (text adaptation),
+                         fsrs-optimize (parameter fitting), contribute (+ moderation),
+                         resources, lexicon, sync, export, account deletion
 ```
 
 ## Documentation set

@@ -54,3 +54,13 @@ flushes — even if the window's `online` event was missed (a backgrounded tab, 
 example). Where Background Sync is unavailable, the `online` listener and the
 Sync button keep working exactly as before. Queue contents never change: the
 same events, the same conflict rules.
+
+## Phase 3 notes
+
+- The backup export now also includes **fitted FSRS parameters** (`fsrs_weights`)
+  and the per-profile **scheduling preferences** (retention per dimension, daily
+  caps). Import restores them only when the target account lacks them — never
+  overwriting anything existing.
+- Daily caps are enforced server-side while online and reported in the session;
+  offline sessions are not capped (there is no honest way to count today's reviews
+  offline) — the session note says so.

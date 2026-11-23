@@ -10,11 +10,13 @@
 
 import { icon, esc, spinner, emptyState, provenanceBadge, bandBadge } from '../ui/components.mjs';
 import { getState, setState, tokenizerFor, languageName } from '../core/store.mjs';
+import { api } from '../core/api.mjs';
 import { loadTexts } from '../core/data.mjs';
 import { scoreText } from '../shared/difficulty.mjs';
 import { DIFFICULTY_MODES } from '../shared/constants.mjs';
 
 const TOPIC_FILTER = { value: null };
+const RESOURCES_CACHE = { lang: null, rows: null };
 
 export async function renderDiscover(container) {
   container.innerHTML = `${spinner('Loading the library')}`;
@@ -50,6 +52,24 @@ export async function renderDiscover(container) {
       }
     }
     sharedWithBodies.push({ ...t, body: body ?? '' });
+  }
+
+  // Extended language resources (phase 3): a curated, license-labelled
+  // catalog for the ACTIVE language. Cached per language for this session.
+  let resources = null;
+  if (activeLang) {
+    if (RESOURCES_CACHE.lang === activeLang) {
+      resources = RESOURCES_CACHE.rows;
+    } else {
+      try {
+        const data = await api('/api/resources', { params: { language: activeLang } });
+        resources = data.resources ?? [];
+        RESOURCES_CACHE.lang = activeLang;
+        RESOURCES_CACHE.rows = resources;
+      } catch {
+        resources = null; // offline or not seeded: the panel says so honestly
+      }
+    }
   }
 
   const userTexts = (state.texts ?? []).filter((t) => !activeLang || t.language_code === activeLang);
@@ -119,9 +139,26 @@ export async function renderDiscover(container) {
       }
     </section>
 
+    ${
+      activeLang
+        ? `<section class="panel">
+      <div class="panel-head"><h2>${icon('library')}Language resources for ${esc(languageName(state.languages, activeLang))}</h2>
+        <span class="muted small">open frequency lists, pronunciation references, corpora and dictionaries</span></div>
+      ${
+        resources == null
+          ? '<p class="muted small">The resource catalog is unavailable right now (offline, or the database is not seeded yet).</p>'
+          : resources.length === 0
+            ? '<p class="muted small">No cataloged resources for this language yet - the community pipeline can add them.</p>'
+            : `<div class="resource-rows">${resources.map(resourceRowHtml).join('')}</div>`
+      }
+      <p class="muted small">Every entry links to the source with its license - the data itself is never copied into this deployment. Provenance: curated catalog entries, community-maintained; verify licenses at the source before redistributing.</p>
+    </section>`
+        : ''
+    }
+
     <section class="panel roadmap-note">
       <h2>${icon('info')}Where this grows next</h2>
-      <p class="muted small">The shared library grows through the community content pipeline (phase 3); frequency-based familiarity is already scored when frequency data is present. Meanwhile the same knowledge state also powers <a href="#/listening">listening</a>, <a href="#/practice">writing practice</a> and <a href="#/grammar">grammar exercises</a>.</p>
+      <p class="muted small">The shared library now grows through the <a href="#/contribute">community content pipeline</a> (moderated contributions with mandatory provenance), texts can be <strong>adapted to your level</strong> from the reader, and frequency data improves the familiarity estimates once ingested. The same knowledge state also powers <a href="#/listening">listening</a>, <a href="#/practice">writing practice</a> and <a href="#/grammar">grammar exercises</a>.</p>
     </section>
   `;
 
@@ -133,4 +170,26 @@ export async function renderDiscover(container) {
   });
 
   return () => {};
+}
+
+/** One row of the language-resources catalog (phase 3). */
+function resourceRowHtml(r) {
+  const kindLabels = {
+    frequency_list: 'frequency list',
+    pronunciation: 'pronunciation',
+    corpus: 'corpus',
+    dictionary: 'dictionary',
+  };
+  return `
+  <div class="resource-row">
+    <a class="resource-main" href="${esc(r.source_url)}" target="_blank" rel="noopener noreferrer">
+      <strong>${esc(r.name)}</strong>
+      <span class="muted small">${esc(r.description ?? '')}</span>
+    </a>
+    <div class="resource-side">
+      <span class="badge outline">${esc(kindLabels[r.kind] ?? r.kind)}</span>
+      <span class="badge neutral" title="${esc(r.source_ref ?? '')}">${esc(r.license)}</span>
+      ${provenanceBadge(r.provenance, { withLabel: false })}
+    </div>
+  </div>`;
 }

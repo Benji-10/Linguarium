@@ -981,3 +981,267 @@ INSERT INTO knowledge.grammar_structures (language_code, name, summary, explanat
     'Linguarium demonstration content (project team). Standard textbook facts about Mandarin grammar.'
   )
 ON CONFLICT (language_code, name) DO NOTHING;
+
+-- ================================================================
+-- Phase 3 batch: personalization columns, shared lexicon starter
+-- entries, the community contribution tables and a curated catalog
+-- of open per-language resources (frequency lists, pronunciation
+-- references, learner corpora, dictionaries) with license metadata.
+--
+-- Everything remains idempotent (IF NOT EXISTS / ON CONFLICT), so
+-- re-running this seed on an existing database only adds what is
+-- missing and never touches user content.
+-- ================================================================
+
+-- Guards for databases created before phase 3 (also in schema.sql).
+ALTER TABLE user_data.language_profiles ADD COLUMN IF NOT EXISTS retention_recognition REAL NOT NULL DEFAULT 0.9;
+ALTER TABLE user_data.language_profiles ADD COLUMN IF NOT EXISTS retention_recall       REAL NOT NULL DEFAULT 0.9;
+ALTER TABLE user_data.language_profiles ADD COLUMN IF NOT EXISTS retention_production    REAL NOT NULL DEFAULT 0.9;
+ALTER TABLE user_data.language_profiles ADD COLUMN IF NOT EXISTS daily_new_limit     INTEGER;
+ALTER TABLE user_data.language_profiles ADD COLUMN IF NOT EXISTS daily_review_limit  INTEGER;
+
+CREATE TABLE IF NOT EXISTS user_data.fsrs_weights (
+  user_id        UUID PRIMARY KEY,
+  weights        JSONB NOT NULL,
+  trained_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  review_count   INTEGER NOT NULL DEFAULT 0,
+  loss_default   REAL,
+  loss_optimized REAL,
+  provenance     TEXT NOT NULL DEFAULT 'automated'
+);
+
+CREATE TABLE IF NOT EXISTS knowledge.contribution_queue (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind          TEXT NOT NULL,
+  language_code TEXT NOT NULL,
+  title         TEXT,
+  payload       JSONB NOT NULL,
+  submitted_by  UUID NOT NULL,
+  submitted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  status        TEXT NOT NULL DEFAULT 'pending',
+  moderated_at  TIMESTAMPTZ,
+  moderator_note TEXT,
+  provenance    TEXT NOT NULL DEFAULT 'community',
+  license       TEXT NOT NULL DEFAULT 'unspecified',
+  source_url    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_contribution_queue_status ON knowledge.contribution_queue (status, submitted_at);
+CREATE INDEX IF NOT EXISTS idx_contribution_queue_submitter ON knowledge.contribution_queue (submitted_by);
+
+CREATE TABLE IF NOT EXISTS knowledge.lexicon (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  language_code TEXT NOT NULL,
+  term          TEXT NOT NULL,
+  reading       TEXT,
+  part_of_speech TEXT,
+  definition    TEXT NOT NULL,
+  gloss_language TEXT NOT NULL DEFAULT 'en',
+  provenance    TEXT NOT NULL DEFAULT 'community',
+  source_url    TEXT,
+  license       TEXT NOT NULL DEFAULT 'unspecified',
+  source_ref    TEXT,
+  created_by    UUID,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lexicon_lang_term
+  ON knowledge.lexicon (language_code, term);
+
+CREATE TABLE IF NOT EXISTS knowledge.resources (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  language_code TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  name          TEXT NOT NULL,
+  description   TEXT,
+  source_url    TEXT NOT NULL,
+  license       TEXT NOT NULL,
+  provenance    TEXT NOT NULL DEFAULT 'community',
+  source_ref    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_resources_lang_name
+  ON knowledge.resources (language_code, name);
+
+-- ---------------------------------------------------------------
+-- Shared lexicon starter entries.
+--
+-- Deliberately small and conservative: only terms whose glosses are
+-- standard, widely published textbook knowledge. Provenance is
+-- 'community' - never 'verified' - and every row asks the reader to
+-- verify against a real source. Grows through the contribution queue.
+-- ---------------------------------------------------------------
+
+INSERT INTO knowledge.lexicon (language_code, term, part_of_speech, definition, gloss_language, provenance, source_url, license, source_ref) VALUES
+  ('tok', 'akesi', 'noun', 'reptile, amphibian; a scaly or wet-skinned animal', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'ala', 'particle', 'no, none, zero; negates the word it follows', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'ale', 'noun', 'all, everything, life (the synonym ali is also common)', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'anu', 'particle', 'or; joins alternatives', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'awen', 'verb', 'to stay, to remain, to wait; still, yet', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'en', 'particle', 'and; joins noun phrases acting as the subject', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'ijo', 'noun', 'thing, something, anything; phenomenon', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'ike', 'adjective', 'bad, unpleasant, unneeded', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'jan', 'noun', 'person, human being, somebody', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'jo', 'verb', 'to have, to hold, to carry', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'kala', 'noun', 'fish, sea creature', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'kasi', 'noun', 'plant, vegetation, herb, leaf', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'ken', 'verb', 'to be able, can; possible', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'kepeken', 'verb', 'to use; (preposition) with, by means of', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'kili', 'noun', 'fruit, vegetable, mushroom', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'kiwen', 'noun', 'hard thing, solid object, stone-like thing', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'kule', 'noun', 'colour, paint; (adjective) colourful', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'kulupu', 'noun', 'group, community, society, gathering', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'lawa', 'noun', 'head; (verb) to lead, to control, to steer', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'lipu', 'noun', 'flat object, book, document, web page', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'luka', 'noun', 'hand, arm; the number five', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'ma', 'noun', 'land, earth, country, outdoors', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'mama', 'noun', 'parent, ancestor; cause, source', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'moku', 'noun', 'food, meal; (verb) to eat, to drink', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('tok', 'pona', 'adjective', 'good, positive, useful; (verb) to improve, to fix, to heal', 'en', 'community', 'https://en.wiktionary.org/wiki/Category:Toki_Pona_language', 'cc-by-sa-4.0', 'Gloss follows the widely published core word list. Verify before relying on it.'),
+  ('eo', 'akvo', 'noun', 'water', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'amiko', 'noun', 'friend', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'bela', 'adjective', 'beautiful, pretty', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'bona', 'adjective', 'good', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'granda', 'adjective', 'large, big', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'hundo', 'noun', 'dog', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'kato', 'noun', 'cat', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'libro', 'noun', 'book', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'lingvo', 'noun', 'language', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'nokto', 'noun', 'night', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'patro', 'noun', 'father', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'patrino', 'noun', 'mother', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'suno', 'noun', 'sun', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'tago', 'noun', 'day', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('eo', 'tero', 'noun', 'earth, ground', 'en', 'community', NULL, 'public-domain', 'Root and gloss as published in the Fundamento de Esperanto (public domain). Verify before relying on it.'),
+  ('la', 'aqua', 'noun', 'water', 'en', 'community', NULL, 'public-domain', 'Standard textbook Latin vocabulary. Verify against a dictionary before relying on it.'),
+  ('la', 'amicus', 'noun', 'friend', 'en', 'community', NULL, 'public-domain', 'Standard textbook Latin vocabulary. Verify against a dictionary before relying on it.'),
+  ('la', 'dies', 'noun', 'day', 'en', 'community', NULL, 'public-domain', 'Standard textbook Latin vocabulary. Verify against a dictionary before relying on it.'),
+  ('la', 'liber', 'noun', 'book', 'en', 'community', NULL, 'public-domain', 'Standard textbook Latin vocabulary. Verify against a dictionary before relying on it.'),
+  ('la', 'lingua', 'noun', 'tongue, language', 'en', 'community', NULL, 'public-domain', 'Standard textbook Latin vocabulary. Verify against a dictionary before relying on it.'),
+  ('la', 'nox', 'noun', 'night', 'en', 'community', NULL, 'public-domain', 'Standard textbook Latin vocabulary. Verify against a dictionary before relying on it.'),
+  ('la', 'sol', 'noun', 'sun', 'en', 'community', NULL, 'public-domain', 'Standard textbook Latin vocabulary. Verify against a dictionary before relying on it.'),
+  ('la', 'terra', 'noun', 'earth, land', 'en', 'community', NULL, 'public-domain', 'Standard textbook Latin vocabulary. Verify against a dictionary before relying on it.')
+ON CONFLICT (language_code, term) DO NOTHING;
+
+-- ---------------------------------------------------------------
+-- Extended language resources: a curated catalog of open resources.
+-- Every entry links to the source with its license; the data itself is
+-- never copied into this database. Provenance is 'community' and the
+-- source_ref asks the reader to verify the license at the source.
+-- ---------------------------------------------------------------
+
+-- Dictionary: the English Wiktionary category of each preset language
+-- (definitions, readings, IPA). Exists for every language in the presets.
+INSERT INTO knowledge.resources (language_code, kind, name, description, source_url, license, provenance, source_ref)
+SELECT
+  l.code,
+  'dictionary',
+  'Wiktionary',
+  'Wiktionary coverage of ' || l.name || ': definitions, readings and IPA pronunciation.',
+  'https://en.wiktionary.org/wiki/Category:' || replace(replace(replace(l.name, ' (', ' '), ')', ''), ' ', '_') || '_language',
+  'CC BY-SA 4.0',
+  'community',
+  'Curated catalog entry. Verify the license at the source before relying on it.'
+FROM knowledge.languages l
+ON CONFLICT (language_code, name) DO NOTHING;
+
+-- Corpus: the Wikipedia edition of each preset language (living text for
+-- reading practice). Toki Pona has no Wikipedia edition and is skipped.
+INSERT INTO knowledge.resources (language_code, kind, name, description, source_url, license, provenance, source_ref)
+SELECT
+  l.code,
+  'corpus',
+  'Wikipedia',
+  'A living corpus of ' || l.name || ' articles: natural prose for reading practice.',
+  'https://' || (CASE WHEN l.code = 'nb' THEN 'no' ELSE l.code END) || '.wikipedia.org',
+  'CC BY-SA 4.0',
+  'community',
+  'Curated catalog entry. Verify the license at the source before relying on it.'
+FROM knowledge.languages l
+WHERE l.code <> 'tok'
+ON CONFLICT (language_code, name) DO NOTHING;
+
+-- Corpus: Tatoeba sentences (learner-friendly sentence pairs; most
+-- sentences CC BY 2.0 FR, some CC0). Tatoeba uses ISO 639-3 codes.
+INSERT INTO knowledge.resources (language_code, kind, name, description, source_url, license, provenance, source_ref)
+SELECT
+  l.code,
+  'corpus',
+  'Tatoeba',
+  'A sentence collection in ' || l.name || ': short natural sentences with translations.',
+  'https://tatoeba.org/en/sentences/show_all/' || (
+    CASE l.code
+      WHEN 'en' THEN 'eng' WHEN 'fr' THEN 'fra' WHEN 'es' THEN 'spa' WHEN 'pt' THEN 'por'
+      WHEN 'it' THEN 'ita' WHEN 'ca' THEN 'cat' WHEN 'de' THEN 'deu' WHEN 'nl' THEN 'nld'
+      WHEN 'sv' THEN 'swe' WHEN 'da' THEN 'dan' WHEN 'fi' THEN 'fin' WHEN 'is' THEN 'isl'
+      WHEN 'pl' THEN 'pol' WHEN 'cs' THEN 'ces' WHEN 'sk' THEN 'slk' WHEN 'hu' THEN 'hun'
+      WHEN 'ro' THEN 'ron' WHEN 'bg' THEN 'bul' WHEN 'ru' THEN 'rus' WHEN 'uk' THEN 'ukr'
+      WHEN 'el' THEN 'ell' WHEN 'la' THEN 'lat' WHEN 'eo' THEN 'epo' WHEN 'tr' THEN 'tur'
+      WHEN 'sq' THEN 'sqi' WHEN 'lt' THEN 'lit' WHEN 'lv' THEN 'lav' WHEN 'et' THEN 'est'
+      WHEN 'cy' THEN 'cym' WHEN 'ga' THEN 'gle' WHEN 'haw' THEN 'haw' WHEN 'af' THEN 'afr'
+      WHEN 'id' THEN 'ind' WHEN 'ms' THEN 'zsm' WHEN 'tl' THEN 'tgl' WHEN 'sw' THEN 'swa'
+      WHEN 'vi' THEN 'vie' WHEN 'ar' THEN 'ara' WHEN 'he' THEN 'heb' WHEN 'fa' THEN 'pes'
+      WHEN 'hi' THEN 'hin' WHEN 'bn' THEN 'ben' WHEN 'ta' THEN 'tam' WHEN 'te' THEN 'tel'
+      WHEN 'kn' THEN 'kan' WHEN 'ml' THEN 'mal' WHEN 'th' THEN 'tha' WHEN 'lo' THEN 'lao'
+      WHEN 'km' THEN 'khm' WHEN 'my' THEN 'mya' WHEN 'zh' THEN 'cmn' WHEN 'ja' THEN 'jpn'
+      WHEN 'ko' THEN 'kor' WHEN 'ur' THEN 'urd' WHEN 'ps' THEN 'pbu'
+      ELSE NULL
+    END),
+  'CC BY 2.0 FR (some sentences CC0)',
+  'community',
+  'Curated catalog entry. Verify the license at the source before relying on it.'
+FROM knowledge.languages l
+WHERE (
+  CASE l.code
+    WHEN 'en' THEN 'eng' WHEN 'fr' THEN 'fra' WHEN 'es' THEN 'spa' WHEN 'pt' THEN 'por'
+    WHEN 'it' THEN 'ita' WHEN 'ca' THEN 'cat' WHEN 'de' THEN 'deu' WHEN 'nl' THEN 'nld'
+    WHEN 'sv' THEN 'swe' WHEN 'da' THEN 'dan' WHEN 'fi' THEN 'fin' WHEN 'is' THEN 'isl'
+    WHEN 'pl' THEN 'pol' WHEN 'cs' THEN 'ces' WHEN 'sk' THEN 'slk' WHEN 'hu' THEN 'hun'
+    WHEN 'ro' THEN 'ron' WHEN 'bg' THEN 'bul' WHEN 'ru' THEN 'rus' WHEN 'uk' THEN 'ukr'
+    WHEN 'el' THEN 'ell' WHEN 'la' THEN 'lat' WHEN 'eo' THEN 'epo' WHEN 'tr' THEN 'tur'
+    WHEN 'sq' THEN 'sqi' WHEN 'lt' THEN 'lit' WHEN 'lv' THEN 'lav' WHEN 'et' THEN 'est'
+    WHEN 'cy' THEN 'cym' WHEN 'ga' THEN 'gle' WHEN 'haw' THEN 'haw' WHEN 'af' THEN 'afr'
+    WHEN 'id' THEN 'ind' WHEN 'ms' THEN 'zsm' WHEN 'tl' THEN 'tgl' WHEN 'sw' THEN 'swa'
+    WHEN 'vi' THEN 'vie' WHEN 'ar' THEN 'ara' WHEN 'he' THEN 'heb' WHEN 'fa' THEN 'pes'
+    WHEN 'hi' THEN 'hin' WHEN 'bn' THEN 'ben' WHEN 'ta' THEN 'tam' WHEN 'te' THEN 'tel'
+    WHEN 'kn' THEN 'kan' WHEN 'ml' THEN 'mal' WHEN 'th' THEN 'tha' WHEN 'lo' THEN 'lao'
+    WHEN 'km' THEN 'khm' WHEN 'my' THEN 'mya' WHEN 'zh' THEN 'cmn' WHEN 'ja' THEN 'jpn'
+    WHEN 'ko' THEN 'kor' WHEN 'ur' THEN 'urd' WHEN 'ps' THEN 'pbu'
+    ELSE NULL
+  END) IS NOT NULL
+ON CONFLICT (language_code, name) DO NOTHING;
+
+-- Hand-curated entries with stable, well-known homes.
+INSERT INTO knowledge.resources (language_code, kind, name, description, source_url, license, provenance, source_ref) VALUES
+  ('en', 'frequency_list', 'Wiktionary frequency lists', 'Community-maintained word frequency lists (including a 100k list) with sources and caveats documented on the page.', 'https://en.wiktionary.org/wiki/Wiktionary:Frequency_lists', 'CC BY-SA 4.0', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('en', 'pronunciation', 'CMU Pronouncing Dictionary', 'A machine-readable pronunciation dictionary of North American English (ARPAbet phonemes).', 'https://www.speech.cs.cmu.edu/cgi-bin/cmudict', 'BSD-style; see the source', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('ja', 'dictionary', 'JMdict / EDICT project', 'The Japanese-English dictionary project behind most open Japanese dictionary apps; XML files with readings, senses and part of speech.', 'https://www.edrdg.org/jmdict/edict.html', 'CC BY-SA 4.0', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('zh', 'dictionary', 'CC-CEDICT', 'A community-maintained Chinese-English dictionary (simplified and traditional, with pinyin), distributed by MDBG.', 'https://www.mdbg.net/chinese/dictionary?page=cedict', 'CC BY-SA 4.0', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('la', 'corpus', 'The Latin Library', 'A large collection of public-domain Latin texts by period and author: classical, medieval and neo-Latin.', 'https://www.thelatinlibrary.com/', 'public domain (see the site notice)', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('eo', 'corpus', 'Tekstaro de Esperanto', 'A searchable corpus of Esperanto literature and the Fundamento texts for reading practice.', 'https://tekstaro.com/', 'free to read; see site terms', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('tok', 'dictionary', 'tokipona.org', 'The official Toki Pona site: the core word list, lessons and reading guidance by the creator of the language.', 'https://tokipona.org/', 'see site terms', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.')
+ON CONFLICT (language_code, name) DO NOTHING;
+
+-- Frequency lists: the FrequencyWords repository publishes
+-- OpenSubtitles-derived top-50k lists for many languages.
+INSERT INTO knowledge.resources (language_code, kind, name, description, source_url, license, provenance, source_ref) VALUES
+  ('en', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for English, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('fr', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for French, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('es', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Spanish, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('pt', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Portuguese, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('it', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Italian, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('de', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for German, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('nl', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Dutch, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('sv', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Swedish, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('ru', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Russian, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('pl', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Polish, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('tr', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Turkish, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('ar', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Arabic, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('hi', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Hindi, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('id', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Indonesian, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('vi', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Vietnamese, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('cs', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Czech, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('el', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Greek, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('uk', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Ukrainian, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('ko', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Korean, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('ja', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Japanese, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.'),
+  ('zh', 'frequency_list', 'FrequencyWords (OpenSubtitles)', 'OpenSubtitles-derived word frequency list for Chinese, maintained in the FrequencyWords repository.', 'https://github.com/hermitdave/FrequencyWords', 'MIT (repository code); verify the data terms in the repository README', 'community', 'Curated catalog entry. Verify the license at the source before relying on it.')
+ON CONFLICT (language_code, name) DO NOTHING;

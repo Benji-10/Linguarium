@@ -177,10 +177,12 @@ export async function renderPractice(container) {
 
 async function submitSelfAssessment(rating, entry, structure) {
   // Production memory through the same pipeline as every other review.
-  const { review } = await import('../shared/fsrs.mjs');
+  const { review, retentionFor } = await import('../shared/fsrs.mjs');
   const { enqueue, upsertCachedEntry } = await import('../core/idb.mjs');
   const memory = entry.memories?.production ?? null;
-  const result = review(memory, rating, Date.now());
+  // Phase 3: the production-dimension target retention of this language profile.
+  const profile = (getState().profiles ?? []).find((p) => p.language_code === entry.language_code);
+  const result = review(memory, rating, Date.now(), { retention: retentionFor(profile, 'production') });
   const updated = {
     ...entry,
     memories: { ...(entry.memories ?? {}), production: { ...result.memory } },

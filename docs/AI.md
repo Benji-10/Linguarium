@@ -48,3 +48,22 @@ The prompt (`buildPrompt` in `netlify/functions/enrich.mjs`) encodes these rules
 Every AI-produced text renders with an *AI generated* badge. Etymology from the model
 renders under "Etymology (unverified AI claim)" or as "No reliable etymology
 available" — see docs/CONTENT.md for the full provenance policy.
+
+## Text adaptation (`POST /api/adapt`, phase 3)
+
+Same contract, one more capability: re-leveling a chosen text toward a target
+difficulty band computed against the user's own knowledge state.
+
+- The model sees: the text itself (fetched server-side, ≤ 12,000 characters), the
+  target band, the language, and two bounded term lists derived from that text
+  (known / unknown terms for this learner, ≤ 150 each) plus a familiarity percentage.
+  It never sees other user data.
+- The result is stored as a **new user text with provenance `ai`** — never
+  `verified` — keeping the original work's author, source URL, license and topic,
+  plus an adaptation note naming the model, the target band and the model's own
+  summary of changes. The original text is never modified.
+- No cache (adaptations are personal): the daily quota applies (action `adapt`),
+  with a 60 s timeout. Longer than 12,000 characters answers 413 with guidance to
+  split the text first — no silent truncation.
+- Without `GEMINI_API_KEY`: 503 `ai-not-configured`, and reading works exactly as
+  before; the button explains itself instead of erroring.

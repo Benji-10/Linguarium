@@ -1,12 +1,20 @@
 /**
  * GET    /api/profiles             - the user's language profiles
- * PUT    /api/profiles              - upsert a profile (language, difficulty mode, gloss language)
+ * PUT    /api/profiles              - upsert a profile (language, difficulty mode,
+ *                                     gloss language, and phase-3 scheduling
+ *                                     preferences: per-dimension target retention
+ *                                     and optional daily caps)
  * DELETE /api/profiles?language=xx  - remove a profile
  *
  * A profile is the user's relationship with a language. It stores the
- * difficulty mode (comfortable/stretch/challenge) and the language the
- * definitions should be written in (gloss language) - the platform is
- * language-agnostic and never assumes English glosses.
+ * difficulty mode (comfortable/stretch/challenge), the language the
+ * definitions should be written in (gloss language - the platform is
+ * language-agnostic and never assumes English glosses), and since phase 3:
+ *   - retention_recognition / retention_recall / retention_production:
+ *     the FSRS target retention per ability dimension (intervals are chosen
+ *     so predicted recall stays above it; 0.7-0.97, default 0.9)
+ *   - daily_new_limit / daily_review_limit: optional daily caps for the
+ *     review queue (NULL = no cap)
  */
 
 import { handler, json, body, query, requireString, HttpError } from './lib/http.mjs';
@@ -14,11 +22,35 @@ import { requireUser, ensureUserRow } from './lib/identity.mjs';
 import { sql } from './lib/db.mjs';
 import { DIFFICULTY_MODES } from './lib/util.mjs';
 
+const PROFILE_SELECT =
+  'id, language_code, difficulty_mode, gloss_language, active, ' +
+  'retention_recognition, retention_recall, retention_production, daily_new_limit, daily_review_limit, ' +
+  'created_at, updated_at';
+
+/** Parse a target retention (0.70-0.97); null means "not provided, keep current". */
+function parseRetention(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) throw new HttpError(400, 'invalid-field', 'Retention values must be numbers between 0.70 and 0.97.');
+  return Math.min(0.97, Math.max(0.7, n));
+}
+
+/** Parse a daily limit (1-999); null/empty means "no cap". */
+function parseLimit(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 999) {
+    throw new HttpError(400, 'invalid-field', 'Daily limits must be whole numbers between 1 and 999 (or empty for no cap).');
+  }
+  return n;
+}
+
 export default handler({
   GET: async (req) => {
     const user = await requireUser();
-    const rows = await sql()`
-      SELECT id, language_code, difficulty_mode, gloss_language, active, created_at, updated_at
+    const s = sql();
+    const rows = await s`
+      SELECT ${s.unsafe(PROFILE_SELECT)}
       FROM user_data.language_profiles
       WHERE user_id = ${user.id}
       ORDER BY created_at`;
@@ -42,15 +74,49 @@ export default handler({
       throw new HttpError(404, 'language-not-found', 'Add the language first (GET /api/languages).');
     }
 
-    const rows = await sql()`
-      INSERT INTO user_data.language_profiles (user_id, language_code, difficulty_mode, gloss_language, active)
-      VALUES (${user.id}, ${language}, ${difficultyMode}, ${glossLanguage}, ${active})
+    // Phase-3 scheduling preferences. Absent fields keep their current values
+    // (the settings UI always sends the whole row, but partial updates must
+    // not wipe a learner's tuning).
+    const retentionRecognition = parseRetention(data.retention_recognition);
+    const retentionRecall = parseRetention(data.retention_recall);
+    const retentionProduction = parseRetention(data.retention_production);
+    const dailyNewLimit = parseLimit(data.daily_new_limit);
+    const dailyReviewLimit = parseLimit(data.daily_review_limit);
+
+    const existing = await sql()`
+      SELECT retention_recognition, retention_recall, retention_production, daily_new_limit, daily_review_limit
+      FROM user_data.language_profiles WHERE user_id = ${user.id} AND language_code = ${language}`;
+    const prev = existing[0] ?? {
+      retention_recognition: 0.9,
+      retention_recall: 0.9,
+      retention_production: 0.9,
+      daily_new_limit: null,
+      daily_review_limit: null,
+    };
+    const rr = retentionRecognition ?? prev.retention_recognition ?? 0.9;
+    const rrc = retentionRecall ?? prev.retention_recall ?? 0.9;
+    const rp = retentionProduction ?? prev.retention_production ?? 0.9;
+    const dnl = data.daily_new_limit === undefined ? (prev.daily_new_limit ?? null) : dailyNewLimit;
+    const drl = data.daily_review_limit === undefined ? (prev.daily_review_limit ?? null) : dailyReviewLimit;
+
+    const s = sql();
+    const rows = await s`
+      INSERT INTO user_data.language_profiles
+        (user_id, language_code, difficulty_mode, gloss_language, active,
+         retention_recognition, retention_recall, retention_production, daily_new_limit, daily_review_limit)
+      VALUES
+        (${user.id}, ${language}, ${difficultyMode}, ${glossLanguage}, ${active}, ${rr}, ${rrc}, ${rp}, ${dnl}, ${drl})
       ON CONFLICT (user_id, language_code) DO UPDATE SET
         difficulty_mode = EXCLUDED.difficulty_mode,
         gloss_language = EXCLUDED.gloss_language,
         active = EXCLUDED.active,
+        retention_recognition = EXCLUDED.retention_recognition,
+        retention_recall = EXCLUDED.retention_recall,
+        retention_production = EXCLUDED.retention_production,
+        daily_new_limit = EXCLUDED.daily_new_limit,
+        daily_review_limit = EXCLUDED.daily_review_limit,
         updated_at = now()
-      RETURNING id, language_code, difficulty_mode, gloss_language, active, created_at, updated_at`;
+      RETURNING ${s.unsafe(PROFILE_SELECT)}`;
     return json({ profile: rows[0] });
   },
 

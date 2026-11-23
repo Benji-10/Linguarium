@@ -7,9 +7,15 @@
   <meta name="description" content="A free, language-agnostic learning platform: natural reading, active practice and FSRS spaced repetition with one shared knowledge state.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#0f766e">
+  <!-- Hides the "powered by Netlify" badge iframe immediately, before any
+       stylesheet loads. Netlify injects #nl-badge-frame only when the site
+       badge is enabled (Site configuration -> Domain management -> badge);
+       this style plus src/core/theme.mjs make sure it never shows. -->
+  <style>#nl-badge-frame,#netlify-badge,.netlify-badge-frame{display:none!important}</style>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
   <link rel="stylesheet" href="/app.css">
   <script type="module" src="/app.js" defer></script>
 </head>

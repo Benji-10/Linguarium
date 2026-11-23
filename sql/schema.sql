@@ -253,3 +253,97 @@ CREATE TABLE IF NOT EXISTS user_data.rate_limits (
   count   INTEGER NOT NULL DEFAULT 0,
   UNIQUE (user_id, window_day, action)
 );
+
+-- ---------------------------------------------------------------
+-- Phase 3: finer personalization.
+--
+-- Per-language-profile scheduling preferences: target retention for each
+-- ability dimension (FSRS intervals are chosen so predicted recall stays
+-- above it) and optional daily caps. NULL limits mean "no cap".
+-- ---------------------------------------------------------------
+
+ALTER TABLE user_data.language_profiles ADD COLUMN IF NOT EXISTS retention_recognition REAL NOT NULL DEFAULT 0.9;
+ALTER TABLE user_data.language_profiles ADD COLUMN IF NOT EXISTS retention_recall       REAL NOT NULL DEFAULT 0.9;
+ALTER TABLE user_data.language_profiles ADD COLUMN IF NOT EXISTS retention_production    REAL NOT NULL DEFAULT 0.9;
+ALTER TABLE user_data.language_profiles ADD COLUMN IF NOT EXISTS daily_new_limit     INTEGER;
+ALTER TABLE user_data.language_profiles ADD COLUMN IF NOT EXISTS daily_review_limit  INTEGER;
+
+-- FSRS-5 parameters fitted to the user's own review history (phase 3).
+-- Weights are the 19 FSRS-5 values; the fit is honest: loss values and the
+-- review count it was trained from are stored alongside and shown in the UI.
+CREATE TABLE IF NOT EXISTS user_data.fsrs_weights (
+  user_id        UUID PRIMARY KEY,
+  weights        JSONB NOT NULL,
+  trained_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  review_count   INTEGER NOT NULL DEFAULT 0,
+  loss_default   REAL,
+  loss_optimized REAL,
+  provenance     TEXT NOT NULL DEFAULT 'automated'
+);
+
+-- ---------------------------------------------------------------
+-- Phase 3: community content pipeline (shared knowledge).
+--
+-- Contribution queue: texts, grammar structures and lexicon entries
+-- submitted by users, held for moderation. Nothing enters the shared
+-- knowledge tables without an explicit admin approval; every submission
+-- carries mandatory provenance and license fields.
+-- ---------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS knowledge.contribution_queue (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind          TEXT NOT NULL,                -- text | grammar | lexicon
+  language_code TEXT NOT NULL,
+  title         TEXT,
+  payload       JSONB NOT NULL,
+  submitted_by  UUID NOT NULL,
+  submitted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  status        TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected
+  moderated_at  TIMESTAMPTZ,
+  moderator_note TEXT,
+  provenance    TEXT NOT NULL DEFAULT 'community',
+  license       TEXT NOT NULL DEFAULT 'unspecified',
+  source_url    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_contribution_queue_status ON knowledge.contribution_queue (status, submitted_at);
+CREATE INDEX IF NOT EXISTS idx_contribution_queue_submitter ON knowledge.contribution_queue (submitted_by);
+
+-- Shared lexicon: community-maintained term definitions (consulted by the
+-- Knowledge lookup next to the user's own entries and AI enrichment).
+CREATE TABLE IF NOT EXISTS knowledge.lexicon (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  language_code TEXT NOT NULL,
+  term          TEXT NOT NULL,
+  reading       TEXT,
+  part_of_speech TEXT,
+  definition    TEXT NOT NULL,
+  gloss_language TEXT NOT NULL DEFAULT 'en',
+  provenance    TEXT NOT NULL DEFAULT 'community',
+  source_url    TEXT,
+  license       TEXT NOT NULL DEFAULT 'unspecified',
+  source_ref    TEXT,
+  created_by    UUID,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lexicon_lang_term
+  ON knowledge.lexicon (language_code, term);
+CREATE INDEX IF NOT EXISTS idx_lexicon_lang ON knowledge.lexicon (language_code);
+
+-- Extended language resources: a curated catalog of open frequency lists,
+-- pronunciation references, learner corpora and dictionaries per language,
+-- each with license metadata. Links point at the source - the data itself
+-- is never copied in (docs/CONTENT.md).
+CREATE TABLE IF NOT EXISTS knowledge.resources (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  language_code TEXT NOT NULL,
+  kind          TEXT NOT NULL,               -- dictionary | pronunciation | corpus | frequency_list
+  name          TEXT NOT NULL,
+  description   TEXT,
+  source_url    TEXT NOT NULL,
+  license       TEXT NOT NULL,
+  provenance    TEXT NOT NULL DEFAULT 'community',
+  source_ref    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_resources_lang_name
+  ON knowledge.resources (language_code, name);

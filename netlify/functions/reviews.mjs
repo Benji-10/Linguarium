@@ -49,9 +49,8 @@ export default handler({
       ORDER BY m.due ASC
       LIMIT ${limit}`;
 
-    const newRows =
-      newLimit > 0
-        ? await s`
+    let newRows = newLimit > 0
+      ? await s`
           SELECT ${s.unsafe(ENTRY_SELECT)}
           FROM user_data.vocab_entries e
           WHERE e.user_id = ${user.id} AND e.deleted_at IS NULL
@@ -59,12 +58,65 @@ export default handler({
             AND (${language === null} OR e.language_code = ${language})
           ORDER BY e.created_at ASC
           LIMIT ${newLimit}`
-        : [];
+      : [];
+
+    // Phase 3: scheduling preferences per language profile, enforced honestly.
+    // The daily caps apply to today's totals (any dimension) for this language;
+    // the response reports the numbers so the client can explain what happened.
+    let scheduling = null;
+    if (language) {
+      const [profileRows, todayRows, newTodayRows] = await Promise.all([
+        s`
+          SELECT retention_recognition, retention_recall, retention_production, daily_new_limit, daily_review_limit
+          FROM user_data.language_profiles
+          WHERE user_id = ${user.id} AND language_code = ${language}`,
+        s`
+          SELECT count(*)::int AS reviews
+          FROM user_data.review_log r
+          JOIN user_data.vocab_entries e ON e.id = r.entry_id
+          WHERE r.user_id = ${user.id} AND r.reviewed_at >= CURRENT_DATE
+            AND (${language === null} OR e.language_code = ${language})`,
+        s`
+          SELECT count(*)::int AS new_cards
+          FROM user_data.vocab_entries e
+          WHERE e.user_id = ${user.id} AND e.deleted_at IS NULL AND e.language_code = ${language}
+            AND EXISTS (SELECT 1 FROM user_data.review_log r WHERE r.entry_id = e.id AND r.reviewed_at >= CURRENT_DATE)
+            AND NOT EXISTS (SELECT 1 FROM user_data.review_log r WHERE r.entry_id = e.id AND r.reviewed_at < CURRENT_DATE)`,
+      ]);
+      const profile = profileRows[0] ?? null;
+      const reviewsToday = todayRows[0]?.reviews ?? 0;
+      const newToday = newTodayRows[0]?.new_cards ?? 0;
+      const reviewLimit = profile?.daily_review_limit ?? null;
+      const newLimitPref = profile?.daily_new_limit ?? null;
+      scheduling = {
+        retention: {
+          recognition: profile?.retention_recognition ?? 0.9,
+          recall: profile?.retention_recall ?? 0.9,
+          production: profile?.retention_production ?? 0.9,
+        },
+        daily_review_limit: reviewLimit,
+        daily_new_limit: newLimitPref,
+        reviews_today: reviewsToday,
+        new_today: newToday,
+      };
+
+      // Enforce the caps: never hide cards silently - the numbers above let
+      // the client say exactly why the session is smaller than the queue.
+      if (reviewLimit != null) {
+        const remaining = Math.max(0, reviewLimit - reviewsToday);
+        if (remaining < dueRows.length) dueRows.length = remaining;
+      }
+      if (newLimitPref != null) {
+        const remaining = Math.max(0, newLimitPref - newToday);
+        if (remaining < newRows.length) newRows = newRows.slice(0, remaining);
+      }
+    }
 
     return json({
       dimension,
       due: dueRows.map((r) => ({ ...entryBase(r), memory: memoryOf(r) })),
       new: newRows.map((r) => ({ ...entryBase(r), memory: null })),
+      scheduling,
     });
   },
 

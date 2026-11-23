@@ -11,11 +11,29 @@ import { route, startRouter } from './core/router.mjs';
 import { renderLayout } from './ui/layout.mjs';
 import { refreshAll } from './core/data.mjs';
 import { refreshQueueCount, flushQueue } from './core/sync.mjs';
+import { initTheme } from './core/theme.mjs';
+import { configureWeights } from './shared/fsrs.mjs';
+
+/** Restored the fitted FSRS parameters saved on this device, if any (phase 3). */
+function bootFsrsWeights() {
+  try {
+    const raw = localStorage.getItem('linguarium.fsrsWeights');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      configureWeights(Array.isArray(parsed) ? parsed : parsed?.weights);
+    }
+  } catch {
+    /* malformed local value: keep the defaults */
+  }
+}
 
 async function main() {
-  // Theme (system / light / dark)
-  const theme = localStorage.getItem('linguarium.theme') || 'auto';
-  document.documentElement.dataset.theme = theme;
+  // Theme mode + accent skin (system / light / dark x teal/ocean/...).
+  initTheme();
+
+  // Fitted FSRS-5 parameters (phase 3 personalization): applied at boot so
+  // every scheduler call in the app uses them, including offline sessions.
+  bootFsrsWeights();
 
   const shell = document.getElementById('app');
   renderLayout(shell);
@@ -35,6 +53,7 @@ async function main() {
   route('#/grammar', (await import('./views/grammar.mjs')).renderGrammar);
   route('#/collections', (await import('./views/collections.mjs')).renderCollections);
   route('#/collections/:id', (await import('./views/collections.mjs')).renderCollections);
+  route('#/contribute', (await import('./views/contribute.mjs')).renderContribute);
   route('#/settings', (await import('./views/settings.mjs')).renderSettings);
 
   // Boot: restore session, then load data (cache-first when offline).
@@ -53,6 +72,19 @@ async function main() {
     }
     if (getState().online && getState().queueCount > 0) {
       flushQueue({ silent: true }).then(() => refreshQueueCount());
+    }
+    // Fitted FSRS parameters: pick up the server copy on a device that has
+    // none saved locally (the user explicitly chose to use them at some point).
+    if (!localStorage.getItem('linguarium.fsrsWeights') && getState().online) {
+      try {
+        const data = await (await import('./core/api.mjs')).api('/api/fsrs-optimize');
+        if (data?.weights) {
+          configureWeights(data.weights);
+          localStorage.setItem('linguarium.fsrsWeights', JSON.stringify(data.weights));
+        }
+      } catch {
+        /* offline or not fitted: defaults stay in effect */
+      }
     }
   }
 

@@ -105,3 +105,35 @@ re-running any of these on a populated database is safe and duplicates nothing.
 Statement splitting is shared between the local script and the admin function
 (`netlify/functions/lib/sqlsplit.mjs`), which is dollar-quote aware, so seed
 bodies may contain semicolons and apostrophes freely.
+
+## Phase 3 additions (all applied idempotently by re-running the seed)
+
+- `user_data.language_profiles` gains scheduling preferences:
+  - `retention_recognition` / `retention_recall` / `retention_production` (REAL,
+    0.70–0.97, default 0.9) — the target retention per ability dimension. The FSRS
+    interval is chosen so predicted recall stays above it.
+  - `daily_new_limit` / `daily_review_limit` (INTEGER, NULL = no cap) — enforced
+    server-side in `GET /api/reviews` and always *reported* in the response, so the
+    UI can say why a session is smaller than the raw due queue. Caps count today's
+    totals per language across dimensions.
+- `user_data.fsrs_weights` — the 19 FSRS-5 parameters fitted to the user's own review
+  history by `POST /api/fsrs-optimize` (deterministic hill climb in
+  `netlify/functions/lib/fsrs-opt.mjs`). Stored with the review count and the loss
+  before/after, provenance `automated`. Included in the backup export; restored by
+  import only when the account has none (never silently overwriting).
+- `knowledge.contribution_queue` — the community content pipeline: submissions of
+  texts, grammar structures and lexicon entries, with mandatory license + source
+  (author or source URL) validated in `netlify/functions/lib/contribute-validate.mjs`.
+  `submitted_by` references the contributor (the only place a user id touches this
+  table); `status` ∈ pending / approved / rejected. Nothing reaches the shared tables
+  without `PUT /api/contribute` (admin, `x-admin-key`, same guard as admin-seed).
+  Approved items are inserted with provenance `community` — never `verified`.
+- `knowledge.lexicon` — shared community term definitions (one row per language +
+  term, `UNIQUE`). Consulted by `GET /api/lexicon` for the Knowledge lookup, always
+  rendered separately from the user's own entries, always `community`-badged with
+  license + source.
+- `knowledge.resources` — the curated catalog of open per-language resources
+  (frequency lists, pronunciation references, corpora, dictionaries) with license
+  metadata, seeded through `sql/seed.sql` (Wiktionary/Wikipedia/Tatoeba generated
+  per preset language plus hand-curated entries). Links point at the source; the data
+  itself is never copied in.

@@ -12,7 +12,9 @@ import { doLogout, doUpdateDisplayName, doPasswordChange, doRequestRecovery } fr
 import { flushQueue, refreshQueueCount, lastSyncTime } from '../core/sync.mjs';
 import { downloadExport } from '../core/api.mjs';
 import { clearAll } from '../core/idb.mjs';
-import { DIFFICULTY_MODES } from '../shared/constants.mjs';
+import { DIFFICULTY_MODES, DIMENSIONS } from '../shared/constants.mjs';
+import { currentMode, currentSkin, setMode, setSkin, SKINS } from '../core/theme.mjs';
+import { configureWeights, resetWeights, usingCustomWeights } from '../shared/fsrs.mjs';
 
 export async function renderSettings(container) {
   const state = getState();
@@ -88,13 +90,38 @@ export async function renderSettings(container) {
       </section>
 
       <section class="panel">
+        <div class="panel-head"><h2>${icon('sliders')}Personalization</h2></div>
+        <p class="muted small">Phase 3: scheduling is personal. Per language you choose the target retention of each ability dimension (how hard the scheduler pushes before a review), daily caps for review sessions and new cards, and - once your review history is long enough - FSRS parameters fitted to your own forgetting curve. Everything is labelled for what it is: an automated fit, never magic.</p>
+        <div id="personalization-body">${spinner('Reading your scheduling preferences')}</div>
+      </section>
+
+      <section class="panel">
         <div class="panel-head"><h2>${icon('eye')}Appearance</h2></div>
-        <div class="sync-row">
-          <select id="theme-select">
-            <option value="auto" ${s.theme === 'auto' ? 'selected' : ''}>Follow the system</option>
-            <option value="light" ${s.theme === 'light' ? 'selected' : ''}>Light</option>
-            <option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>Dark</option>
-          </select>
+        <div class="appearance-block">
+          <div class="appearance-row">
+            <div>
+              <strong class="small">Mode</strong>
+              <p class="muted small">Light, dark, or follow the system. The topbar button flips between them quickly.</p>
+            </div>
+            <select id="theme-select">
+              <option value="auto" ${s.theme === 'auto' ? 'selected' : ''}>Follow the system</option>
+              <option value="light" ${s.theme === 'light' ? 'selected' : ''}>Light</option>
+              <option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>Dark</option>
+            </select>
+          </div>
+          <div class="appearance-row skin-row">
+            <div>
+              <strong class="small">Accent</strong>
+              <p class="muted small">Every accent works in both light and dark mode. ${icon('info')} System fonts only - nothing is loaded from third-party servers.</p>
+            </div>
+            <div class="skin-grid" id="skin-grid">
+              ${SKINS.map(
+                (skin) => `<button class="skin-swatch ${skin.id === currentSkin() ? 'active' : ''}" data-skin="${skin.id}" title="${esc(skin.label)} accent">`
+                  + `<span class="skin-dot" style="--dot:${skin.light}"></span><span class="skin-dot dark" style="--dot:${skin.dark}"></span>`
+                  + `<span class="skin-name">${esc(skin.label)}</span></button>`,
+              ).join('')}
+            </div>
+          </div>
         </div>
       </section>
     `;
@@ -103,6 +130,7 @@ export async function renderSettings(container) {
     bindDataControls(container);
     bindAccountControls(container);
     bindTheme(container);
+    bindPersonalization(container);
     updateSyncInfo();
   };
 
@@ -377,9 +405,193 @@ export async function renderSettings(container) {
       const theme = e.target.value;
       localStorage.setItem('linguarium.theme', theme);
       setState({ theme });
-      document.documentElement.dataset.theme = theme;
+      setMode(theme);
+    });
+    root.querySelector('#skin-grid')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-skin]');
+      if (!btn) return;
+      setSkin(btn.dataset.skin);
+      root.querySelectorAll('.skin-swatch').forEach((el) => el.classList.toggle('active', el === btn));
+      toast(`${btn.querySelector('.skin-name')?.textContent ?? 'Accent'} accent applied.`, 'pos');
     });
   };
+
+  // ------------------------------------------------------------- phase 3
+
+  const bindPersonalization = async (root) => {
+    const host = root.querySelector('#personalization-body');
+    if (!host) return;
+
+    // --- FSRS parameter fitting card (account-wide) ---
+    let fitted = null;
+    try {
+      fitted = await api('/api/fsrs-optimize');
+    } catch {
+      fitted = null;
+    }
+
+    const drawPersonalization = () => {
+      const profiles = getState().profiles ?? [];
+      const weightsActive = usingCustomWeights();
+      host.innerHTML = `
+        <div class="profile-sched-rows">
+          ${
+            profiles.length === 0
+              ? '<p class="muted small">No language profiles yet - add a language above.</p>'
+              : profiles.map(profileSchedRowHtml).join('')
+          }
+        </div>
+        <div class="fsrs-fit-card">
+          <div class="panel-head">
+            <h2>${icon('flash')}FSRS parameters fitted to your history</h2>
+            <span class="badge ${weightsActive ? 'pos' : 'neutral'}">${weightsActive ? 'in use on this device' : 'defaults in use'}</span>
+          </div>
+          <p class="muted small">The 19 FSRS-5 weights can be refitted to your own review log (at least 300 scored intervals are needed, so the fit is meaningful and not noise-chasing). This is automated analysis, provenance-labelled, and reversible at any time.</p>
+          <div id="fsrs-fit-state">${fsrsFitStateHtml(fitted, weightsActive)}</div>
+          <div class="sync-row">
+            <button class="btn primary" id="fsrs-fit-run">${icon('flash')}Fit parameters to my review history</button>
+            ${weightsActive || fitted?.weights ? `<button class="btn subtle" id="fsrs-fit-forget">${icon('x')}Back to default parameters</button>` : ''}
+          </div>
+        </div>`;
+
+      root.querySelectorAll('[data-pers-profile]').forEach((btn) =>
+        btn.addEventListener('click', () => openSchedulingModal(btn.dataset.persProfile)),
+      );
+      root.querySelector('#fsrs-fit-run')?.addEventListener('click', () => runFsrsFit(host));
+      root.querySelector('#fsrs-fit-forget')?.addEventListener('click', async () => {
+        try {
+          await api('/api/fsrs-optimize', { method: 'DELETE' });
+        } catch {
+          /* the server copy may already be gone */
+        }
+        localStorage.removeItem('linguarium.fsrsWeights');
+        resetWeights();
+        fitted = null;
+        toast('Back to the default FSRS-5 parameters everywhere.', 'pos');
+        drawPersonalization();
+      });
+    };
+
+    const runFsrsFit = async () => {
+      const btn = root.querySelector('#fsrs-fit-run');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `${icon('flash')}Fitting...`;
+      }
+      try {
+        const result = await api('/api/fsrs-optimize', { method: 'POST' });
+        if (result?.fitted) {
+          fitted = result;
+          const delta = Math.round((1 - result.loss_optimized / result.loss_default) * 1000) / 10;
+          const m = modal({
+            title: 'FSRS parameters fitted',
+            bodyHtml: `
+              <p>Fit complete: the log-loss on your own review history improved by <strong>${delta}%</strong> (${result.review_count} scored intervals, ${result.sequences} sequences).</p>
+              <p class="muted small">Default loss ${result.loss_default.toFixed(4)} -> fitted loss ${result.loss_optimized.toFixed(4)}. This is an automated fit to your history - not a guarantee. Applying it is your choice and fully reversible.</p>`,
+            actionsHtml: `<button class="btn subtle" data-close>Not now</button><button class="btn primary" id="fsrs-apply">Use the fitted parameters</button>`,
+          });
+          m.el.querySelector('[data-close]').addEventListener('click', m.close);
+          m.el.querySelector('#fsrs-apply').addEventListener('click', () => {
+            applyWeights(result.weights);
+            m.close();
+          });
+          drawPersonalization();
+        } else {
+          toast(result?.reason ?? 'The optimizer could not improve on the default parameters. Nothing was changed.', 'info');
+        }
+      } catch (err) {
+        toast(err.message ?? 'The fit failed.', 'neg');
+      }
+      drawPersonalization();
+    };
+
+    const applyWeights = (weights) => {
+      configureWeights(weights);
+      localStorage.setItem('linguarium.fsrsWeights', JSON.stringify(weights));
+      toast('Your fitted FSRS parameters are now scheduling your reviews.', 'pos');
+      drawPersonalization();
+    };
+
+    drawPersonalization();
+  };
+
+  const openSchedulingModal = (code) => {
+    const s = getState();
+    const profile = (s.profiles ?? []).find((p) => p.language_code === code);
+    if (!profile) return;
+    const lang = (s.languages ?? []).find((l) => l.code === code);
+    const dims = ['recognition', 'recall', 'production'];
+    const m = modal({
+      title: `Scheduling - ${lang?.name ?? code}`,
+      bodyHtml: `
+        <form class="stack" id="sched-form">
+          ${dims
+            .map((dim) => {
+              const value = profile[`retention_${dim}`] ?? 0.9;
+              return `<label class="retention-row">${DIMENSIONS[dim].label} target retention
+            <span class="retention-live mono" id="ret-live-${dim}">${Math.round(value * 100)}%</span>
+            <input type="range" id="ret-${dim}" min="70" max="97" step="1" value="${Math.round(value * 100)}">
+            <span class="muted small">${DIMENSIONS[dim].description}</span>
+          </label>`;
+            })
+            .join('')}
+          <div class="sched-limits">
+            <label>Daily review cap <input type="number" min="1" max="999" id="lim-review" placeholder="no cap" value="${profile.daily_review_limit ?? ''}"></label>
+            <label>Daily new-card cap <input type="number" min="1" max="999" id="lim-new" placeholder="no cap" value="${profile.daily_new_limit ?? ''}"></label>
+          </div>
+          <p class="muted small">Higher retention = shorter intervals = more reviews; lower = longer gaps, riskier recall. Caps count today's totals for this language (any dimension) and are reported honestly in the review session - never silently.</p>
+        </form>`,
+      actionsHtml: `<button class="btn subtle" data-close>Cancel</button><button class="btn primary" id="sched-save">Save scheduling</button>`,
+    });
+    m.el.querySelectorAll('input[type=range]').forEach((range) => {
+      range.addEventListener('input', () => {
+        const live = m.el.querySelector(`#ret-live-${range.id.replace('ret-', '')}`);
+        if (live) live.textContent = `${range.value}%`;
+      });
+    });
+    m.el.querySelector('[data-close]').addEventListener('click', m.close);
+    m.el.querySelector('#sched-save').addEventListener('click', async () => {
+      const val = (id) => {
+        const el = m.el.querySelector(id);
+        return el && el.value !== '' ? Number(el.value) : null;
+      };
+      try {
+        await api('/api/profiles', {
+          method: 'PUT',
+          body: {
+            language_code: code,
+            difficulty_mode: profile.difficulty_mode,
+            gloss_language: profile.gloss_language,
+            retention_recognition: val('#ret-recognition') / 100,
+            retention_recall: val('#ret-recall') / 100,
+            retention_production: val('#ret-production') / 100,
+            daily_review_limit: val('#lim-review'),
+            daily_new_limit: val('#lim-new'),
+          },
+        });
+        await loadProfiles();
+        m.close();
+        toast('Scheduling preferences saved.', 'pos');
+        const host = document.querySelector('#personalization-body');
+        if (host) bindPersonalization(document.querySelector('.view'));
+      } catch (err) {
+        toast(err.message ?? 'Could not save the scheduling preferences.', 'neg');
+      }
+    });
+  };
+
+  const fsrsFitStateHtml = (fitted, weightsActive) => {
+    if (weightsActive && fitted?.weights) {
+      const delta = Math.round((1 - fitted.loss_optimized / fitted.loss_default) * 1000) / 10;
+      return `<p class="muted small">Fitted ${new Date(fitted.trained_at).toLocaleDateString()} from ${fitted.review_count} intervals (loss improvement ${Number.isFinite(delta) ? `${delta}%` : 'n/a'}). <strong>These parameters are scheduling your reviews on this device.</strong> Back up any time: they are included in your export.</p>`;
+    }
+    if (fitted?.weights) {
+      return `<p class="muted small">A fitted parameter set exists (trained ${new Date(fitted.trained_at).toLocaleDateString()}, ${fitted.review_count} intervals) but is not in use on this device. Fit again to re-evaluate, or review on another device.</p>`;
+    }
+    return '<p class="muted small">No fitted parameters yet. The FSRS-5 defaults are in use - they are excellent parameters, and fitting is optional.</p>';
+  };
+
+  // ------------------------------------------------------------ phase 3 end
 
   draw();
   return () => {};
@@ -409,5 +621,21 @@ function profileRowHtml(p, glossOptions) {
       </label>
       <button class="icon-btn pm-remove" title="Remove this profile">${icon('trash')}</button>
     </div>
+  </div>`;
+}
+
+/** One row of the Personalization panel: per-profile scheduling summary. */
+function profileSchedRowHtml(p) {
+  const s = getState();
+  const lang = (s.languages ?? []).find((l) => l.code === p.language_code);
+  const ret = (d) => Math.round((p[`retention_${d}`] ?? 0.9) * 100);
+  const limits = `${p.daily_review_limit ? `${p.daily_review_limit} reviews/day` : 'no review cap'} - ${p.daily_new_limit ? `${p.daily_new_limit} new cards/day` : 'no new-card cap'}`;
+  return `
+  <div class="profile-sched-row">
+    <div class="profile-sched-main">
+      <strong>${esc(lang?.name ?? p.language_code)}</strong>
+      <span class="muted small">recognition ${ret('recognition')}% - recall ${ret('recall')}% - production ${ret('production')}% - ${esc(limits)}</span>
+    </div>
+    <button class="btn subtle small" data-pers-profile="${esc(p.language_code)}">${icon('sliders')}Scheduling</button>
   </div>`;
 }

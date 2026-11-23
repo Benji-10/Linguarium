@@ -4,7 +4,7 @@
  * is used anywhere - only the headless @netlify/identity library.
  */
 
-import { icon, esc, toast } from '../ui/components.mjs';
+import { icon, esc, toast, brandLogo } from '../ui/components.mjs';
 import {
   doLogin,
   doSignup,
@@ -149,7 +149,7 @@ function authShellHtml(mode) {
   <div class="auth-wrap">
     <div class="auth-card panel">
       <div class="auth-brand">
-        <span class="brand-mark large">${icon('globe').toString()}</span>
+        <span class="brand-mark large">${brandLogo().toString()}</span>
         <h1>Linguarium</h1>
         <p class="muted">A calm home for every language you learn - including the ones nobody built an app for.</p>
       </div>

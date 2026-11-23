@@ -25,6 +25,54 @@ export const DEFAULT_W = [
   2.9898, 0.51655, 0.6621,
 ];
 
+/**
+ * Active weights (phase 3): the scheduler runs with these. They default to
+ * DEFAULT_W and can be replaced by parameters fitted to the user's own
+ * review history (Settings - Personalization; /api/fsrs-optimize).
+ * configureWeights() validates before swapping anything in: a malformed
+ * vector never reaches the scheduler.
+ */
+let ACTIVE_W = DEFAULT_W;
+
+export function configureWeights(weights) {
+  if (
+    Array.isArray(weights) &&
+    weights.length === DEFAULT_W.length &&
+    weights.every((x) => Number.isFinite(x) && x > 0 && x <= 1000)
+  ) {
+    ACTIVE_W = weights.map(Number);
+  }
+  return activeWeights();
+}
+
+export function resetWeights() {
+  ACTIVE_W = DEFAULT_W;
+}
+
+export function activeWeights() {
+  return [...ACTIVE_W];
+}
+
+export function usingCustomWeights() {
+  return ACTIVE_W !== DEFAULT_W;
+}
+
+/**
+ * Target retention for one ability dimension from a language profile
+ * (phase 3 scheduling preferences). Falls back to 0.9 everywhere.
+ */
+export function retentionFor(profile, dimension) {
+  const map = {
+    recognition: profile?.retention_recognition,
+    recall: profile?.retention_recall,
+    production: profile?.retention_production,
+  };
+  const v = map[dimension];
+  if (v == null || v === '' || typeof v === 'boolean') return DESIRED_RETENTION;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(0.97, Math.max(0.7, n)) : DESIRED_RETENTION;
+}
+
 /** Forgetting curve constants (FSRS-4.5 and later). */
 export const DECAY = -0.5;
 export const FACTOR = 19 / 81; // 0.9^(-1/DECAY) - 1, so R(S days, S) = 0.9
@@ -73,25 +121,25 @@ export function intervalForRetention(retention, stability) {
 }
 
 /** Scheduled interval (whole days) for the next review of a stability value. */
-export function nextIntervalDays(stability) {
-  const interval = intervalForRetention(DESIRED_RETENTION, stability);
+export function nextIntervalDays(stability, retention = DESIRED_RETENTION) {
+  const interval = intervalForRetention(retention, stability);
   return clamp(Math.round(interval), MIN_INTERVAL_DAYS, MAX_INTERVAL_DAYS);
 }
 
 /** Initial difficulty after the first rating (FSRS-5). */
 export function initialDifficulty(rating) {
-  const w = DEFAULT_W;
+  const w = ACTIVE_W;
   return clamp(w[4] - Math.exp(w[5]) * (rating - 1) + 1, 1, 10);
 }
 
 /** New memory state after the very first review. */
-export function newMemory(rating, now = Date.now()) {
-  const S0 = DEFAULT_W[rating - 1];
+export function newMemory(rating, now = Date.now(), retention = DESIRED_RETENTION) {
+  const S0 = ACTIVE_W[rating - 1];
   let due;
   if (rating === 1) {
     due = now + AGAIN_RETRY_MS; // retry within the session
   } else {
-    due = now + nextIntervalDays(S0) * DAY_MS;
+    due = now + nextIntervalDays(S0, retention) * DAY_MS;
   }
   return {
     stability: S0,
@@ -110,7 +158,7 @@ export function newMemory(rating, now = Date.now()) {
  *   D''    = w7 * D0(4) + (1 - w7) * D'        (mean reversion toward D0(4))
  */
 export function nextDifficulty(difficulty, rating) {
-  const w = DEFAULT_W;
+  const w = ACTIVE_W;
   const deltaD = -w[6] * (rating - 3);
   const d1 = difficulty + (deltaD * (10 - difficulty)) / 9;
   const d2 = w[7] * initialDifficulty(4) + (1 - w[7]) * d1;
@@ -125,7 +173,7 @@ export function nextDifficulty(difficulty, rating) {
  *   S' = S * e^(w17 (G - 3 + w18))
  */
 export function successStability(S, D, R, rating, elapsedDays) {
-  const w = DEFAULT_W;
+  const w = ACTIVE_W;
   if (elapsedDays < 1) {
     // Same-day review: short-term update.
     return S * Math.exp(w[17] * (rating - 3 + w[18]));
@@ -145,7 +193,7 @@ export function successStability(S, D, R, rating, elapsedDays) {
  *   S'f = w11 * D^-w12 * ((S + 1)^w13 - 1) * e^(w14 (1 - R))
  */
 export function lapseStability(S, D, R) {
-  const w = DEFAULT_W;
+  const w = ACTIVE_W;
   return w[11] * Math.pow(D, -w[12]) * (Math.pow(S + 1, w[13]) - 1) * Math.exp(w[14] * (1 - R));
 }
 
@@ -155,11 +203,16 @@ export function lapseStability(S, D, R) {
  * @param {object|null} memory prior state, or null for the first review
  * @param {1|2|3|4} rating
  * @param {number} now review time (ms epoch)
+ * @param {{retention?: number}} [opts] phase 3: per-dimension target retention
+ *   from the language profile (0.7-0.97; defaults to DESIRED_RETENTION)
  * @returns {{memory: object, log: object}} new state and a review-log record
  */
-export function review(memory, rating, now = Date.now()) {
+export function review(memory, rating, now = Date.now(), opts = {}) {
+  const retention = Number.isFinite(Number(opts.retention))
+    ? clamp(Number(opts.retention), 0.7, 0.97)
+    : DESIRED_RETENTION;
   if (memory == null) {
-    const m = newMemory(rating, now);
+    const m = newMemory(rating, now, retention);
     return {
       memory: m,
       log: {
@@ -185,7 +238,7 @@ export function review(memory, rating, now = Date.now()) {
   } else {
     stability = successStability(memory.stability, memory.difficulty, R, rating, elapsedDays);
     stability = Math.max(stability, 0.01);
-    due = now + nextIntervalDays(stability) * DAY_MS;
+    due = now + nextIntervalDays(stability, retention) * DAY_MS;
   }
 
   const next = {

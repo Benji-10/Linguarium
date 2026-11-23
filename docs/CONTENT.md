@@ -61,3 +61,26 @@ inputs (`src/shared/difficulty.mjs`) for the phase 2 content pipeline.
   a note to replace it before running an open community.
 
 Nothing in the seed pretends to be something it is not.
+
+## Community contributions (phase 3)
+
+The shared library grows through moderated contributions. The rules are the same as
+the seed data's, enforced by validation and moderation:
+
+1. **License is mandatory and must be real.** "Unspecified" is rejected at submission.
+2. **Provenance must be traceable**: a text needs an author or a source URL; grammar
+   and lexicon entries must cite where their content comes from.
+3. **Nothing is auto-published.** Submissions wait in the moderation queue; an admin
+   (`x-admin-key`, see README) approves or rejects with a note. Approved items enter
+   the shared tables with provenance `community` — never `verified`.
+4. **Invented etymology is a rejection reason** — same non-negotiable rule as above.
+5. Rate-limited submissions (20/day) per user.
+
+## Extended language resources (phase 3)
+
+`knowledge.resources` is a catalog of *links* — open frequency lists, pronunciation
+references, learner corpora, dictionaries — each with license metadata and a
+"verify at the source" note. The data itself is never copied into the deployment,
+and the catalog deliberately covers under-resourced languages (Toki Pona included)
+alongside the big ones. It is community-maintained content: `community` provenance,
+never `verified`.
