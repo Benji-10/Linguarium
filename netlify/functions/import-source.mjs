@@ -11,8 +11,8 @@
  *     the text is saved through POST /api/texts. Nothing is stored here.
  *
  *   { mode: 'provider', provider, ref, language_code, wiki? }
- *     Full import from a catalog item (aozora | gutenberg | wikisource |
- *     wikipedia | wikibooks | wikinews | wikivoyage): fetches the text, attaches the
+ *     Full import from a catalog item (aozora | gutenberg | classics |
+ *     wikisource | wikipedia | wikibooks | wikinews | wikivoyage): fetches the text, attaches the
  *     source's own metadata
  *     (author, source URL, license) and stores it as a user text with
  *     provenance 'user-imported'. Gutenberg books longer than the import cap
@@ -20,6 +20,10 @@
  *     nothing is silently truncated. Aozora works arrive via the official
  *     HTML edition (furigana kept as ruby annotations) with the aozorahack.org
  *     mirror and the official .zip as fallbacks, all decoded from Shift-JIS.
+ *     Gutenberg metadata (title/author) comes from the committed catalogue
+ *     snapshot, so an import never depends on the flaky live Gutendex API;
+ *     the classics shelf fetches the exact verified page from the language's
+ *     own Wikisource edition through the normal wiki pipeline.
  *     The optional `wiki` field is the wiki EDITION code the item was found
  *     on ("mi" for mi.wikipedia.org): the custom-edition bridge stamps it on
  *     catalog items whose edition differs from the saved language, so the
@@ -29,6 +33,7 @@
 import { handler, json, body, requireString, HttpError } from './lib/http.mjs';
 import { requireUser, ensureUserRow, languageFor } from './lib/identity.mjs';
 import { sql } from './lib/db.mjs';
+import { gutenbergBook } from './lib/gutenberg-shelves.mjs';
 import {
   fetchText,
   fetchTextCapped,
@@ -39,6 +44,7 @@ import {
   aozoraByRef,
   aozoraUrls,
   fetchAozoraText,
+  classicsByRef,
   validWikiCode,
   fetchWikiJson,
   GUTENBERG_TEXT_URLS,
@@ -55,7 +61,7 @@ const MAX_BODY_CHARS = 200000;
 // that fits the TOTAL function budget (~28 s worst case).
 const GUTENBERG_CANDIDATE_TIMEOUTS = [24000, 8000, 8000];
 const GUTENBERG_BYTE_CAP = 700 * 1024; // > the 200k-char import cut for every script
-const TEXT_PROVIDERS = new Set(['gutenberg', 'wikisource', 'wikipedia', 'wikibooks', 'wikinews', 'wikivoyage', 'aozora']);
+const TEXT_PROVIDERS = new Set(['gutenberg', 'classics', 'wikisource', 'wikipedia', 'wikibooks', 'wikinews', 'wikivoyage', 'aozora']);
 
 const PROVIDER_META = {
   aozora: {
@@ -64,13 +70,21 @@ const PROVIDER_META = {
   },
   gutenberg: {
     license: 'public-domain',
-    // Gutendex returns { authors: [{ name, ... }], ... } - anonymous works
-    // (author: null / empty array) must not crash the import; they fall
-    // back to an honest "Unknown author".
+    // Live Gutendex returns { authors: [{ name, ... }], ... } - anonymous
+    // works (author: null / empty array) must not crash the import; they fall
+    // back to an honest "Unknown author". Used only when the committed
+    // catalogue snapshot does not know the id (books beyond its 20,000
+    // English cap found through the live search supplement).
     authorOf: (meta) =>
       (Array.isArray(meta?.authors) ? meta.authors.map((a) => a?.name).filter(Boolean).join(', ') : '') || null,
     pageUrl: (ref) => `https://www.gutenberg.org/ebooks/${ref}`,
     note: 'Public-domain book fetched from the Project Gutenberg text archive.',
+  },
+  classics: {
+    license: 'unspecified (varies per work - check the work page)',
+    authorOf: (meta) => meta?.author ?? null,
+    pageUrl: (language, ref) => `https://${language}.wikisource.org/wiki/${encodeURIComponent(ref)}`,
+    note: 'Text from the curated classic literature shelf, hosted on the language own Wikisource edition - the license varies per work; open the source page and correct the license/author if needed.',
   },
   wikisource: {
     license: 'unspecified (varies per work - check the work page)',
@@ -270,25 +284,53 @@ export default handler({
 
       if (provider === 'gutenberg') {
         if (!/^\d+$/.test(ref)) throw new HttpError(400, 'invalid-ref', 'Gutenberg refs are numeric book ids.');
+        // Metadata from the committed catalogue snapshot first: instant,
+        // offline, and immune to the Gutendex outages that used to land books
+        // as "Gutenberg book 78105, Unknown author". The live API is only
+        // consulted for ids the snapshot does not carry (recent uploads found
+        // through the live search supplement) and its failure is harmless.
+        const snap = gutenbergBook(ref);
         let meta = null;
-        try {
-          meta = await fetchJsonRetry(GUTENDEX_BOOK_URL(ref), { timeoutMs: 9000 });
-        } catch {
-          /* metadata is best-effort; the text fetch below decides */
+        if (!snap) {
+          try {
+            meta = await fetchJsonRetry(GUTENDEX_BOOK_URL(ref), { timeoutMs: 9000 });
+          } catch {
+            /* best-effort only; the text fetch below decides */
+          }
         }
         const fetched = await fetchGutenbergBody(ref);
         body = fetched.body;
         byteCapped = fetched.byteCapped;
         const meta2 = PROVIDER_META.gutenberg;
-        // `meta` can be null (Gutendex slow/rate-limited) or an object whose
-        // authors array is empty (anonymous works): both crashed the import
-        // in the wild (2026-11) - every access is guarded and the fallback
-        // is an honest "Unknown author".
-        author = meta2.authorOf(meta) ?? 'Unknown author';
+        // `meta` can still be null (snapshot miss + live API slow) or an
+        // object with an empty authors array (anonymous works): every access
+        // is guarded and the fallback is an honest "Unknown author".
+        author = snap?.author || meta2.authorOf(meta) || 'Unknown author';
         license = meta2.license;
         sourceUrl = meta2.pageUrl(ref);
-        note = meta2.note;
-        title = meta?.title ?? `Gutenberg book ${ref}`;
+        note = snap
+          ? `${meta2.note} Title and author from the bundled catalogue snapshot.`
+          : meta2.note;
+        title = snap?.title ?? meta?.title ?? `Gutenberg book ${ref}`;
+      } else if (provider === 'classics') {
+        // Curated classic literature: the ref names the exact Wikisource page
+        // that was verified to carry the text. It is fetched through the
+        // normal wikisource pipeline; the curated entry supplies the display
+        // title and author.
+        const work = classicsByRef(languageCode, ref);
+        if (!work) {
+          throw new HttpError(400, 'invalid-ref', 'Unknown classics entry (the curated shelf in the catalog is the source of truth).');
+        }
+        if (validWikiCode(data.wiki) && validWikiCode(data.wiki) !== languageCode) {
+          throw new HttpError(400, 'invalid-wiki-code', 'Classic literature is fixed to the work own language edition - the wiki code cannot be overridden here.');
+        }
+        body = await fetchWikiPage('wikisource', languageCode, work.ref);
+        const meta = PROVIDER_META.classics;
+        author = work.au;
+        license = meta.license;
+        sourceUrl = meta.pageUrl(languageCode, work.ref);
+        note = meta.note;
+        title = work.t;
       } else if (provider === 'aozora') {
         const fetched = await fetchAozoraWork(ref, languageCode);
         body = fetched.body;

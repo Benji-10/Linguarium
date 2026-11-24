@@ -11,8 +11,10 @@
  *   - upload .txt / .html / .epub (parsed in the browser, ruby-aware)
  *   - import from a URL (fetched server-side, previewed, you confirm metadata)
  *   - the open library: per-language sources - Aozora Bunko for Japanese,
- *     Project Gutenberg where it stocks books, Wikisource / Wikipedia /
- *     Wikibooks / Wikinews and curated news feeds elsewhere
+ *     a curated Classic literature shelf for Korean, Russian and Chinese,
+ *     Project Gutenberg where it stocks books (browsing from a committed
+ *     catalogue snapshot, so it never waits on the flaky live API),
+ *     Wikisource / Wikipedia / Wikibooks / Wikinews and curated news feeds
  *   - AI-generated texts (Gemini, optional, provenance 'ai')
  * Provenance is a first-class concern: real content keeps its attribution,
  * adaptations keep the original work's information, AI content says so.
@@ -175,7 +177,7 @@ const TABS = [
   { id: 'paste', label: 'Paste', hint: 'Text you have on hand - keep its source details.' },
   { id: 'upload', label: 'Upload', hint: 'A .txt, .html or .epub file from your device.' },
   { id: 'url', label: 'URL', hint: 'An article or story on the web, fetched for you.' },
-  { id: 'library', label: 'Open library', hint: 'Free sources for your language: Aozora for Japanese, Gutenberg where it stocks books, the wiki family anywhere.' },
+  { id: 'library', label: 'Open library', hint: 'Free sources for your language: Aozora for Japanese, Classic literature for Korean, Russian and Chinese, Gutenberg where it stocks books, the wiki family anywhere.' },
   { id: 'ai', label: 'Generate (AI)', hint: 'A new text written for you by the optional AI.' },
 ];
 
@@ -455,7 +457,8 @@ const PROVIDER_CACHE = { lang: null, data: null };
 
 /** The sources that serve this language, in recommended order - fetched from
  *  /api/catalog (server-verified per language: Aozora leads for Japanese,
- *  Gutenberg only where a shelf exists, Korean gets the wiki family...).
+ *  the Classic literature shelf leads for Korean, Russian and Chinese,
+ *  Gutenberg only where the bundled catalogue snapshot has a shelf...).
  *  Falls back to a static pair when offline. */
 async function providersFor(languageCode) {
   if (PROVIDER_CACHE.lang === languageCode) return PROVIDER_CACHE.data;

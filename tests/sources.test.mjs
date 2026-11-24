@@ -16,6 +16,14 @@ import {
   mapWiktionaryParseHtml,
   mapFreeDictionaryApi,
   mapGutendex,
+  gutenbergTopicMatches,
+  filterGutenbergRows,
+  paginateRows,
+  mapGutenbergRows,
+  CLASSICS_WORKS,
+  CLASSICS_LANGUAGES,
+  classicsCatalogItems,
+  classicsByRef,
   mapMediawikiSearch,
   extractFromMwExtracts,
   extractFromMwParse,
@@ -337,20 +345,100 @@ test('per-language registry: every app language has at least one provider', () =
   }
 });
 
-test('per-language registry: gutenberg only where stocked, aozora leads Japanese', () => {
-  // Probed 2026-11: Korean has 1 book (useless shelf), so Gutenberg is not
-  // offered; Japanese leads with Aozora Bunko; the wiki family is everywhere.
+test('per-language registry: gutenberg only where stocked, aozora leads Japanese, classics leads Korean/Russian', () => {
+  // The Gutenberg shelf list is generated from the official catalogue
+  // snapshot (gutenberg-languages.mjs): Korean has no shelf at all, Japanese
+  // has a small one behind Aozora. Korean and Russian lead with the curated
+  // Classic literature shelf instead - real books, not just wiki + news.
   assert.equal(GUTENBERG_LANGUAGES.includes('ko'), false);
   assert.equal(GUTENBERG_LANGUAGES.includes('ja'), true);
   assert.equal(providersForLanguage('ja')[0].id, 'aozora');
   assert.ok(providersForLanguage('ja').some((p) => p.id === 'gutenberg'));
-  assert.equal(providersForLanguage('ko')[0].id, 'wikisource');
+  assert.equal(providersForLanguage('ko')[0].id, 'classics');
+  assert.ok(providersForLanguage('ko').some((p) => p.id === 'wikisource'));
+  assert.equal(providersForLanguage('ru')[0].id, 'classics');
+  assert.equal(providersForLanguage('zh')[0].id, 'classics');
+  assert.ok(providersForLanguage('zh').some((p) => p.id === 'gutenberg'));
   assert.equal(providersForLanguage('fr')[0].id, 'gutenberg');
   // Toki Pona's Wikipedia was relaunched on tok.wikipedia.org (verified live
   // 2026-11 via siteinfo) and its texts live on the multilingual
   // wikisource.org - so Toki Pona is no longer source-less.
   assert.equal(providersForLanguage('tok').some((p) => p.id === 'wikipedia'), true);
   assert.equal(providersForLanguage('tok').some((p) => p.id === 'wikisource'), true);
+});
+
+test('gutenberg snapshot helpers: filter, topic match and pagination are pure and local', () => {
+  const rows = [
+    { id: '11', title: 'Alice in Wonderland', author: 'Carroll, Lewis', blurb: 'Category: Children · Fantasy' },
+    { id: '12', title: 'Pride and Prejudice', author: 'Austen, Jane', blurb: 'Category: Romance' },
+    { id: '13', title: 'Grimms Fairy Tales', author: 'Grimm', blurb: 'Fairy tales · Folklore' },
+    { id: '14', title: 'The Adventures of Sherlock Holmes', author: 'Doyle', blurb: 'Category: Mystery, Thrillers & Suspense · Short stories' },
+  ];
+  // Topic matching runs against the catalogue's own subject tags.
+  assert.equal(gutenbergTopicMatches('fairy tales', 'Fairy tales · Folklore'), true);
+  assert.equal(gutenbergTopicMatches('fairy tales', 'Category: Romance'), false);
+  assert.equal(gutenbergTopicMatches('mystery', 'Category: Mystery, Thrillers & Suspense'), true);
+  assert.equal(gutenbergTopicMatches('fiction', 'Category: Historical Novels'), true);
+  assert.equal(gutenbergTopicMatches('not-a-topic', 'anything'), false);
+  // Free-text filter: title and author, case-insensitive.
+  assert.deepEqual(
+    filterGutenbergRows(rows, { query: 'austen' }).map((r) => r.id),
+    ['12'],
+  );
+  assert.equal(filterGutenbergRows(rows, { query: 'wonderland' }).length, 1);
+  assert.equal(filterGutenbergRows(rows, { query: 'nothing-matches' }).length, 0);
+  // Topic + query combine.
+  assert.deepEqual(
+    filterGutenbergRows(rows, { query: '', topic: 'fairy tales' }).map((r) => r.id),
+    ['13'],
+  );
+  // Pagination: 32 per page, pager shape the UI reads.
+  const many = Array.from({ length: 70 }, (_, i) => ({ id: String(i), title: `t${i}`, author: '', blurb: '' }));
+  const p1 = paginateRows(many, 1, 32);
+  assert.equal(p1.items.length, 32);
+  assert.deepEqual(p1.pages, { count: 70, next: true, previous: false });
+  const p3 = paginateRows(many, 3, 32);
+  assert.equal(p3.items.length, 6);
+  assert.deepEqual(p3.pages, { count: 70, next: false, previous: true });
+  // Mapping to catalog items keeps the shape the import expects.
+  const items = mapGutenbergRows([rows[1]], 'fr');
+  assert.equal(items[0].provider, 'gutenberg');
+  assert.equal(items[0].ref, '12');
+  assert.equal(items[0].title, 'Pride and Prejudice');
+  assert.equal(items[0].author, 'Austen, Jane');
+  assert.equal(items[0].language, 'fr');
+  assert.equal(items[0].license, 'public-domain');
+  assert.equal(items[0].source_url, 'https://www.gutenberg.org/ebooks/12');
+});
+
+test('classics shelf: curated real works for ko/ru/zh, locally filterable', () => {
+  assert.deepEqual([...CLASSICS_LANGUAGES].sort(), ['ko', 'ru', 'zh']);
+  // Every language has a real shelf of verified works.
+  for (const lang of CLASSICS_LANGUAGES) {
+    const items = classicsCatalogItems(lang, '');
+    assert.ok(items.length >= 9, `${lang} should carry a real classics shelf`);
+    for (const it of items) {
+      assert.ok(it.ref && it.title && it.author && it.description, `${lang}/${it.ref} needs full metadata`);
+      assert.equal(it.provider, 'classics');
+      assert.equal(it.language, lang);
+      assert.ok(it.source_url.startsWith(`https://${lang}.wikisource.org/wiki/`));
+    }
+  }
+  // Refs are unique per language (they are exact page titles).
+  for (const lang of CLASSICS_LANGUAGES) {
+    const refs = CLASSICS_WORKS[lang].map((w) => w.ref);
+    assert.equal(new Set(refs).size, refs.length, `${lang} has duplicate refs`);
+  }
+  // Local search filters on title/author/description.
+  assert.equal(classicsCatalogItems('ko', '윤동주').length, 2);
+  assert.equal(classicsCatalogItems('ru', 'Chekhov').length, 9);
+  assert.equal(classicsCatalogItems('zh', '兵法').length, 1);
+  assert.equal(classicsCatalogItems('ko', 'no-such-work').length, 0);
+  // Import metadata lookup by ref.
+  assert.equal(classicsByRef('ru', 'Каштанка')?.au, 'А. П. Чехов');
+  assert.equal(classicsByRef('ko', 'nothing'), null);
+  // The provider registry exposes it for every curated language.
+  assert.ok(providersForLanguage('ko').some((p) => p.id === 'classics'));
 });
 
 test('wiki host remap: Norwegian (nb) editions live on the no. subdomain', () => {

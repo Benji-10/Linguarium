@@ -1,8 +1,8 @@
 /**
  * GET /api/catalog - search the open content sources for importable texts.
  *
- *   ?language=ja&q=neko&provider=aozora|gutenberg|wikisource|wikipedia|wikibooks|wikinews|news
- *   &page=2                     (Gutenberg pagination)
+ *   ?language=ja&q=neko&provider=aozora|gutenberg|classics|wikisource|wikipedia|wikibooks|wikinews|news
+ *   &page=2                     (Gutenberg pagination, served from the snapshot)
  *   &topic=fiction              (Gutenberg genre filter, validated allowlist)
  *   &wiki=mi                    (custom-edition wiki code for wikipedia/wikisource)
  *
@@ -11,9 +11,16 @@
  * the provider catalog itself so the UI can render the tabs: with a
  * `language`, each provider is marked whether it actually serves that
  * language (the sources differ per language - Japanese leads with Aozora
- * Bunko, Korean gets the wiki family plus the Hankyoreh feed, Gutenberg only
- * where a shelf exists). Sources that do NOT serve the language are omitted
- * entirely rather than greyed out - a disabled tab reads as a broken tab.
+ * Bunko, Korean with the Classic literature shelf, Gutenberg only where the
+ * bundled catalogue snapshot has a shelf). Sources that do NOT serve the
+ * language are omitted entirely rather than greyed out - a disabled tab
+ * reads as a broken tab.
+ *
+ * Gutenberg browsing/search is INSTANT: it reads the committed catalogue
+ * snapshot (lib/gutenberg-shelves.mjs) with no upstream call at all. The
+ * flaky live Gutendex API is consulted only as a supplement when an English
+ * search finds nothing in the snapshot (books beyond its 20,000 English
+ * cap), and its failure degrades to an honest note, never an error.
  *
  * Custom languages: a language whose code is not in the built-in wiki lists
  * gets its own code probed once (memoized) - Maori "mi" lights up
@@ -27,13 +34,14 @@
 import { handler, json, query, requireString, HttpError } from './lib/http.mjs';
 import { requireUser } from './lib/identity.mjs';
 import { sql } from './lib/db.mjs';
+import { gutenbergShelf } from './lib/gutenberg-shelves.mjs';
 import {
   PROVIDERS,
   GUTENBERG_LANGUAGES,
   GUTENBERG_TOPICS,
+  CLASSICS_LANGUAGES,
   NEWS_FEEDS,
   GUTENDEX_SEARCH_URL,
-  GUTENDEX_BROWSE_URL,
   MW_SEARCH_URL,
   MW_MOSTVIEWED_URL,
   MW_ALLPAGES_URL,
@@ -41,6 +49,10 @@ import {
   validWikiCode,
   wikiEditionExists,
   aozoraCatalogItems,
+  classicsCatalogItems,
+  filterGutenbergRows,
+  paginateRows,
+  mapGutenbergRows,
   mapGutendex,
   gutendexPageInfo,
   mapMediawikiSearch,
@@ -185,11 +197,29 @@ export default handler({
       });
     }
 
+    if (provider === 'classics') {
+      // Curated famous-work shelf (Korean pansori and novels, Chekhov and
+      // Pushkin, the Chinese canon...), served locally like Aozora: no
+      // network, no rate limit. The import fetches the exact page from the
+      // language's own Wikisource edition.
+      if (!CLASSICS_LANGUAGES.includes(language)) {
+        throw new HttpError(400, 'not-for-language', 'The classic literature shelf is only curated for Korean, Russian and Chinese so far - use Wikisource to browse everything else.');
+      }
+      const items = classicsCatalogItems(language, search);
+      return json({
+        provider,
+        language,
+        query: search,
+        items,
+        note: `${items.length} famous public-domain ${language === 'ko' ? 'Korean' : language === 'ru' ? 'Russian' : 'Chinese'} works, hand-picked and hosted on ${language}.wikisource.org - imported through the Wikisource text pipeline (license varies per work; each source page is authoritative).`,
+      });
+    }
+
     if (provider === 'gutenberg') {
-      // Gutenberg is only offered where the catalogue actually has a shelf:
-      // Gutendex HANGS (minutes) on languages with no books, and gutenberg.org
-      // itself throttles datacenter traffic - a doomed query looks like a dead
-      // API to the user. The honest answer is "no shelf here, use X instead".
+      // Gutenberg is only offered where the bundled catalogue snapshot
+      // actually has a shelf (the old live Gutendex route HUNG on languages
+      // with no books, and gutenberg.org itself throttles datacenter
+      // traffic). The honest answer is "no shelf here, use X instead".
       if (!GUTENBERG_LANGUAGES.includes(language)) {
         const alternatives = providersForLanguage(language).filter((p) => p.id !== 'gutenberg');
         return json({
@@ -197,106 +227,80 @@ export default handler({
           language,
           query: search,
           items: [],
-          note: `Project Gutenberg has no meaningful shelf for this language - it is only offered for languages it stocks. For ${language}, try: ${alternatives.map((p) => p.label).join(', ') || 'the wiki sources'}.`,
+          note: `Project Gutenberg's catalogue has no meaningful shelf for this language. For ${language}, try: ${alternatives.map((p) => p.label).join(', ') || 'the wiki sources'}.`,
         });
       }
-      // Gutendex routes: browsing by language (/books/?languages=xx&page=N)
-      // is fast and reliable; free-text search is NOT (it can stall the
-      // upstream for minutes - reproduced 2026-11), so it gets a short
-      // timeout and falls back to a filtered browse of the language shelf.
-      // Every upstream call is memo-cached for 10 minutes: Gutendex
-      // rate-limits bursts aggressively (also reproduced 2026-11).
-      //
-      // TIME BUDGET (2026-11 fix): the function dies at ~10 s. Retries used
-      // to stack 3 x 12 s attempts and the client saw "page 2 always times
-      // out; a refresh sometimes fixes it" (the refresh hit the memo cache a
-      // slow first attempt had populated in the background). Now: 2 attempts
-      // x 4 s fit the budget, a failure serves the last cached page (stale
-      // beats error), and a cold miss answers with a friendly retry note
-      // instead of a 502.
-      const page = Math.min(100, Math.max(1, Number(q.page) || 1));
+      // Snapshot-first browsing: the committed pg_catalog snapshot answers
+      // instantly (title/author search and topic filtering run locally), so
+      // the flaky live API is never on the critical path. The ONE thing the
+      // snapshot cannot know is English books beyond its 20,000-book cap and
+      // brand-new uploads, so an English search with no local hits gets one
+      // short best-effort live attempt; its failure degrades to a note.
+      const page = Math.min(10000, Math.max(1, Number(q.page) || 1));
       const topic = GUTENBERG_TOPICS.includes(String(q.topic ?? '')) ? String(q.topic) : null;
-      const cacheKey = (url) => `gutendex:${url}`;
-      const fetchGutendex = async (key, url) => {
+      const shelf = gutenbergShelf(language);
+      let filtered = filterGutenbergRows(shelf, { query: search, topic });
+      let note = search
+        ? `${filtered.length} match${filtered.length === 1 ? '' : 'es'} in the bundled Project Gutenberg catalogue (${shelf.length} ${language} books in total, newest uploads not yet included).`
+        : `The bundled Project Gutenberg catalogue: all ${shelf.length} ${language} books it stocks, in catalogue order. Search filters titles and authors; topic filters use the catalogue's own subject tags.`;
+
+      if (search && filtered.length === 0 && language === 'en') {
+        // Live supplement (English only): books outside the snapshot. Every
+        // call is memo-cached; Gutendex rate-limits bursts aggressively and
+        // 403-refuses datacenter traffic at times, so a failure here is
+        // EXPECTED and only costs the user a note, never a 502.
+        const url = GUTENDEX_SEARCH_URL(search, language, Math.min(100, page));
+        const key = `gutendex:${url}`;
         try {
-          return {
-            data: await memoJson(key, 10 * 60 * 1000, () =>
-              fetchJsonRetry(url, { timeoutMs: 4000, attempts: 2, backoffMs: 250, maxBytes: 2 * 1024 * 1024 }),
-            ),
-            stale: false,
-          };
+          const data = await memoJson(key, 10 * 60 * 1000, () =>
+            fetchJsonRetry(url, { timeoutMs: 4000, attempts: 2, backoffMs: 250, maxBytes: 2 * 1024 * 1024 }),
+          );
+          const items = mapGutendex(data);
+          if (items.length > 0) {
+            return json({
+              provider,
+              language,
+              query: search,
+              page,
+              pages: gutendexPageInfo(data),
+              note: 'From the live catalogue search (these books are newer than the bundled snapshot).',
+              topic,
+              items,
+            });
+          }
         } catch {
           const cached = memoJsonStale(key);
-          if (cached) return { data: cached, stale: true };
-          return { data: null, stale: false };
-        }
-      };
-      let note = null;
-      let result;
-      if (search) {
-        result = await fetchGutendex(
-          cacheKey(GUTENDEX_SEARCH_URL(search, language, page)),
-          GUTENDEX_SEARCH_URL(search, language, page),
-        );
-        if (!result.data) {
-          result = await fetchGutendex(
-            cacheKey(GUTENDEX_BROWSE_URL(language, 1, topic)),
-            GUTENDEX_BROWSE_URL(language, 1, topic),
-          );
-          if (result.data) {
-            note =
-              "Project Gutenberg's search is slow right now - showing the " +
-              `${language} public-domain shelf instead; the filter below applied your words to titles and authors on it.`;
+          if (cached) {
+            const items = mapGutendex(cached);
+            if (items.length > 0) {
+              return json({
+                provider,
+                language,
+                query: search,
+                page,
+                pages: gutendexPageInfo(cached),
+                note: 'From the last successful live catalogue search - the catalogue was slow just now.',
+                topic,
+                items,
+              });
+            }
           }
+          note =
+            `No match in the bundled catalogue (it carries the first 20,000 English books). ` +
+            'The live catalogue search did not answer in time - it rate-limits bursts; try again in a few seconds.';
         }
-      } else {
-        result = await fetchGutendex(
-          cacheKey(GUTENDEX_BROWSE_URL(language, page, topic)),
-          GUTENDEX_BROWSE_URL(language, page, topic),
-        );
       }
-      if (!result.data) {
-        // Cold miss on a slow upstream: an honest, actionable answer rather
-        // than a 502. The next attempt usually lands (Gutendex throttles
-        // bursts, and successful pages stay memo-cached for 10 minutes).
-        return json({
-          provider,
-          language,
-          query: search,
-          page,
-          pages: null,
-          note: "Project Gutenberg's catalogue did not answer in time (it rate-limits bursts). Press Search or Next again in a few seconds - pages that have loaded once stay cached for ten minutes.",
-          topic,
-          items: [],
-        });
-      }
-      if (result.stale) {
-        note =
-          (note ? `${note} ` : '') +
-          'Showing the last successfully loaded version of this page - the catalogue was slow just now.';
-      }
-      let items = mapGutendex(result.data);
-      if (note && search) {
-        const needle = search.toLowerCase();
-        items = items.filter(
-          (it) =>
-            (it.title ?? '').toLowerCase().includes(needle) ||
-            (it.author ?? '').toLowerCase().includes(needle),
-        );
-      }
-      // The shelf itself may mix languages; the active language wins.
-      const activeLang = language === 'nb' ? 'no' : language;
-      items = items.filter((it) => it.language === activeLang);
-      const pageInfo = gutendexPageInfo(result.data);
+
+      const { items: pageRows, pages } = paginateRows(filtered, page, 32);
       return json({
         provider,
         language,
         query: search,
         page,
-        pages: pageInfo,
+        pages,
         note,
         topic,
-        items,
+        items: mapGutenbergRows(pageRows, language),
       });
     }
 
