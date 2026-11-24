@@ -475,6 +475,7 @@ function renderLibraryTab(panel, modalRef, languageCode) {
     <div class="stack">
       <div class="library-controls">
         <select id="l-provider" aria-label="Source"><option value="">Loading sources...</option></select>
+        <input id="l-wiki" hidden maxlength="12" placeholder="wiki edition code, e.g. mi (Maori), scn (Sicilian), simple (Simple English)" title="The wiki edition to read - only the custom-edition sources ask for it" style="max-width:220px;flex:none">
         <input id="l-query" maxlength="200" placeholder="Search (title, topic, author...) - leave empty to browse the language shelf">
         <button class="btn primary small" id="l-search">${icon('compass')}Search</button>
       </div>
@@ -485,6 +486,9 @@ function renderLibraryTab(panel, modalRef, languageCode) {
   const results = el('l-results');
   // Page cursor for providers that paginate (Project Gutenberg).
   let currentPage = 1;
+  // Providers that need a user-typed wiki edition code (the custom-edition
+  // bridge for user-added languages like Maori or a conlang).
+  const needsCode = new Set();
 
   const itemRowsHtml = (items) =>
     `<div class="stack">${items
@@ -496,7 +500,7 @@ function renderLibraryTab(panel, modalRef, languageCode) {
             <span class="muted small">${esc(it.author ?? 'unattributed')}${it.description ? ` - ${esc(it.description)}` : ''}</span>
             <span class="muted small">${esc(it.license ?? '')}${it.source_url ? ` - <a href="${esc(it.source_url)}" target="_blank" rel="noopener noreferrer">source</a>` : ''}</span>
           </div>
-          <button class="btn subtle small" data-import-ref="${esc(it.ref)}" data-import-provider="${esc(it.provider)}" data-import-title="${esc(it.title)}">${icon('download')}Import</button>
+          <button class="btn subtle small" data-import-ref="${esc(it.ref)}" data-import-provider="${esc(it.provider)}" data-import-wiki="${esc(it.wiki ?? '')}" data-import-title="${esc(it.title)}">${icon('download')}Import</button>
         </div>`,
       )
       .join('')}</div>`;
@@ -504,20 +508,37 @@ function renderLibraryTab(panel, modalRef, languageCode) {
   const pagerHtml = (data) => {
     if (!data?.pages) return '';
     const pager = [];
-    if (data.pages.previous && currentPage > 1) pager.push(`<button class="btn subtle small" data-page="${currentPage - 1}">${icon('chevron')}Previous page</button>`);
+    if (data.pages.previous && currentPage > 1) pager.push(`<button class="btn subtle small" data-page="${currentPage - 1}">${icon('chevronLeft')}Previous page</button>`);
     if (data.pages.count != null) pager.push(`<span class="muted small">page ${currentPage} of ${Math.ceil(data.pages.count / 32)} - ${data.pages.count} books in this language</span>`);
     if (data.pages.next) pager.push(`<button class="btn subtle small" data-page="${currentPage + 1}">Next page${icon('chevron')}</button>`);
     return pager.length ? `<div class="library-controls" style="margin-top:10px">${pager.join(' ')}</div>` : '';
   };
 
+  // The wiki edition code to read: required for the custom-edition sources
+  // (user-added languages), remembered per panel while it is open.
+  const WIKI_CODE_RE = /^[a-z][a-z0-9-]{1,11}$/;
+  const wikiCode = () => {
+    const provider = el('l-provider').value;
+    const code = el('l-wiki').value.trim().toLowerCase();
+    if (!provider.endsWith('-custom')) return null;
+    if (!code || !WIKI_CODE_RE.test(code)) {
+      el('l-wiki').focus();
+      toast('Type a wiki language code first - e.g. "mi" (Maori), "scn" (Sicilian), "simple" (Simple English).', 'warn');
+      return undefined;
+    }
+    return code;
+  };
+
   const search = async (page = 1) => {
     const provider = el('l-provider').value;
     if (!provider) return;
+    const wiki = wikiCode();
+    if (wiki === undefined) return;
     const q = el('l-query').value.trim();
     currentPage = page;
     results.innerHTML = `${spinner(page > 1 ? 'Loading page ' + page : 'Searching')}`;
     try {
-      const data = await api('/api/catalog', { params: { provider, language: languageCode, q, page } });
+      const data = await api('/api/catalog', { params: { provider, language: languageCode, q, page, ...(wiki ? { wiki } : {}) } });
       el('l-note').textContent =
         data.note ??
         (data.failed_feeds?.length ? `Feed unavailable: ${data.failed_feeds.join(', ')} - try again later.` : "Free, keyless sources that serve your active language - importing keeps the source's license and attribution.");
@@ -554,6 +575,7 @@ function renderLibraryTab(panel, modalRef, languageCode) {
               provider: btn.dataset.importProvider,
               ref: btn.dataset.importRef,
               language_code: languageCode,
+              ...(btn.dataset.importWiki ? { wiki: btn.dataset.importWiki } : {}),
             },
           });
           if (data.truncated) toast('The source is longer than the import limit - the first part was imported (the text says so).', 'info');
@@ -574,28 +596,41 @@ function renderLibraryTab(panel, modalRef, languageCode) {
   el('l-query').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') search(1);
   });
+  el('l-wiki').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') search(1);
+  });
 
   // The provider select reflects what actually serves this language: the
   // recommended source comes first (Aozora for Japanese, Gutenberg where a
-  // shelf exists, the wiki family otherwise); sources that do not stock the
-  // language stay listed but disabled with the reason in their label.
+  // shelf exists, the wiki family otherwise); sources with no shelf for the
+  // language are omitted entirely by the API - a disabled entry reads as a
+  // broken one. Custom-edition sources (any wiki by its language code) show
+  // the code field while they are selected.
   const populateProviders = async () => {
     const providers = await providersFor(languageCode);
     const select = el('l-provider');
-    const available = providers.filter((p) => p.available !== false);
-    const unavailable = providers.filter((p) => p.available === false);
-    select.innerHTML =
-      available.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('') +
-      (unavailable.length
-        ? unavailable.map((p) => `<option value="" disabled>${esc(p.label)} - no shelf for this language</option>`).join('')
-        : '');
-    if (available.length === 0) {
+    for (const p of providers) if (p.needs_code) needsCode.add(p.id);
+    select.innerHTML = providers.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
+    const syncWikiField = () => {
+      const provider = select.value;
+      const wikiInput = el('l-wiki');
+      wikiInput.hidden = !needsCode.has(provider);
+      if (!needsCode.has(provider)) wikiInput.value = '';
+    };
+    select.addEventListener('change', syncWikiField);
+    syncWikiField();
+    if (providers.length === 0) {
       results.innerHTML =
         '<p class="muted small">No open source is registered for this language yet - paste a text, upload a file or import from a URL meanwhile.</p>';
       return;
     }
     // Opening the tab browses the language shelf immediately (the fast route
     // per provider); failures above render a retry instead of raw errors.
+    if (needsCode.has(select.value)) {
+      results.innerHTML =
+        '<p class="muted small">This source reads any wiki edition by its language code - type one (e.g. "mi" for Maori, "simple" for Simple English) and press Search.</p>';
+      return;
+    }
     search(1);
   };
   populateProviders().catch(() => {

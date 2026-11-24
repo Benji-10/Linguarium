@@ -10,7 +10,7 @@
  *     the metadata form so the user asserts source/license themselves before
  *     the text is saved through POST /api/texts. Nothing is stored here.
  *
- *   { mode: 'provider', provider, ref, language_code }
+ *   { mode: 'provider', provider, ref, language_code, wiki? }
  *     Full import from a catalog item (aozora | gutenberg | wikisource |
  *     wikipedia | wikibooks | wikinews): fetches the text, attaches the
  *     source's own metadata
@@ -20,6 +20,10 @@
  *     nothing is silently truncated. Aozora works arrive via the official
  *     HTML edition (furigana kept as ruby annotations) with the aozorahack.org
  *     mirror and the official .zip as fallbacks, all decoded from Shift-JIS.
+ *     The optional `wiki` field is the wiki EDITION code the item was found
+ *     on ("mi" for mi.wikipedia.org): the custom-edition bridge stamps it on
+ *     catalog items whose edition differs from the saved language, so the
+ *     import reads exactly the page the user saw.
  */
 
 import { handler, json, body, requireString, HttpError } from './lib/http.mjs';
@@ -35,6 +39,8 @@ import {
   aozoraByRef,
   aozoraUrls,
   fetchAozoraText,
+  validWikiCode,
+  fetchWikiJson,
   GUTENBERG_TEXT_URLS,
   GUTENDEX_BOOK_URL,
   MW_EXTRACT_URL,
@@ -154,15 +160,17 @@ async function fetchGutenbergBody(bookId) {
 
 async function fetchWikiPage(project, language, title) {
   // Plain extract first; Wikisource pages sometimes need the HTML route.
+  // Both via fetchWikiJson: HTTP/2 first, because the Wikimedia CDN
+  // 403-refuses plain HTTP/1.1 from whole datacenter ranges.
   try {
-    const data = await fetchJson(MW_EXTRACT_URL(project, language, title), { timeoutMs: 25000 });
+    const data = await fetchWikiJson(MW_EXTRACT_URL(project, language, title), { timeoutMs: 25000 });
     const extract = extractFromMwExtracts(data);
     if (extract && extract.trim().length > 0) return extract.trim();
   } catch {
     /* fall through to the parse route */
   }
   try {
-    const data = await fetchJson(MW_PARSE_URL(project, language, title), { timeoutMs: 25000 });
+    const data = await fetchWikiJson(MW_PARSE_URL(project, language, title), { timeoutMs: 25000 });
     const parsed = extractFromMwParse(data);
     if (parsed && parsed.trim().length > 0) return parsed.trim();
   } catch {
@@ -277,12 +285,22 @@ export default handler({
         title = aozoraByRef(ref)?.t ?? ref;
       } else {
         const project = provider; // wikisource | wikipedia | wikibooks | wikinews
-        body = await fetchWikiPage(project, languageCode, ref);
+        // Wiki edition to fetch from: the custom-edition bridge stamps the
+        // browsed edition on the catalog item; without it the import reads the
+        // user's own language edition (the historical behaviour).
+        const edition = validWikiCode(data.wiki) ?? languageCode;
+        if (data.wiki != null && data.wiki !== '' && edition !== data.wiki) {
+          throw new HttpError(400, 'invalid-wiki-code', 'The wiki edition code looks invalid - use a plain code like "mi" or "simple".');
+        }
+        body = await fetchWikiPage(project, edition, ref);
         const meta = PROVIDER_META[provider];
         author = meta.authorOf();
         license = meta.license;
-        sourceUrl = meta.pageUrl(languageCode, ref);
-        note = meta.note;
+        sourceUrl = meta.pageUrl(edition, ref);
+        note =
+          edition !== languageCode
+            ? `${meta.note} Imported from the ${edition} edition; saved under your active language.`
+            : meta.note;
         title = ref;
       }
 

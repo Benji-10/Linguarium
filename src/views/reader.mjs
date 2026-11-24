@@ -31,6 +31,10 @@ import { attachListenBar } from '../shared/listen.mjs';
 
 const RUBY_MODE_KEY = (lang) => `linguarium.ruby.${lang}`;
 
+/** A token only earns furigana/pinyin when it actually contains Han
+ *  characters (Kanji for Japanese, Hanzi for Chinese). */
+const HAN_SCRIPT_RE = /\p{Script=Han}/u;
+
 export async function renderReader(container, params) {
   const { kind, id } = params; // kind: user | shared
   container.innerHTML = `${spinner('Opening the text')}`;
@@ -153,7 +157,7 @@ export async function renderReader(container, params) {
     <div class="reader-body ${rtl ? 'rtl' : ''}" id="reader-body" dir="${rtl ? 'rtl' : 'ltr'}" lang="${esc(language)}"></div>
 
     <div class="reader-pager" id="reader-pager" hidden>
-      <button class="btn subtle small" id="pg-prev" title="Previous page (left arrow)">${icon('chevron')}Previous</button>
+      <button class="btn subtle small" id="pg-prev" title="Previous page (left arrow)">${icon('chevronLeft')}Previous</button>
       <span class="pager-info" id="pg-info"></span>
       <button class="btn subtle small" id="pg-next" title="Next page (right arrow)">Next${icon('chevron')}</button>
     </div>
@@ -161,7 +165,7 @@ export async function renderReader(container, params) {
 
     <div class="listen-bar" id="listen-bar" hidden>
       <button class="btn subtle small" id="listen-play">${icon('headphones')}Listen</button>
-      <button class="icon-btn" id="listen-prev" title="Previous sentence">${icon('chevron')}</button>
+      <button class="icon-btn" id="listen-prev" title="Previous sentence">${icon('chevronLeft')}</button>
       <button class="icon-btn" id="listen-next" title="Next sentence">${icon('chevron')}</button>
       <span class="muted small" id="listen-note"></span>
     </div>
@@ -487,6 +491,10 @@ export async function renderReader(container, params) {
     container.querySelector('#wp-badges').innerHTML =
       `${statusBadge(status)}${entry ? provenanceBadge(entry.source_type) : ''}`;
     renderPanelContent(entry, termRaw, norm);
+    // Clicking a word IS a lookup request: the dictionary chain (offline
+    // cache first, then the online dictionaries) starts on its own. Short
+    // words and selections only - a whole dragged passage is not a term.
+    if (termRaw.length <= 40 && !lookups.has(norm)) doLookup(termRaw, norm);
   };
 
   const closePanel = () => {
@@ -918,6 +926,10 @@ export async function renderReader(container, params) {
       if (e.target === modal) modal.remove();
     });
     document.body.appendChild(modal);
+    // The overlay fades in via .in (an opacity transition). Without this
+    // class it stays opacity:0 - invisible but covering the whole page,
+    // which reads as a frozen screen that no longer responds to clicks.
+    requestAnimationFrame(() => modal.classList.add('in'));
   });
 
   return () => {
@@ -995,9 +1007,14 @@ function renderTokens(
       }
 
       // Vocabulary ruby: a reading the learner's data (or a lookup / AI
-      // analysis cached this session) already carries.
+      // analysis cached this session) already carries. Only tokens that
+      // CONTAIN Kanji/Han get furigana or pinyin - annotating a pure-kana
+      // word with its own reading is noise ("ここ（ここ）" helps nobody).
       const norm = normalizeTerm(tok.text, tokenizer);
-      const reading = showRuby && vocabReadings ? vocabReadings.get(norm) ?? vocabReadings.get(tok.text) : null;
+      const reading =
+        showRuby && vocabReadings && HAN_SCRIPT_RE.test(tok.text)
+          ? vocabReadings.get(norm) ?? vocabReadings.get(tok.text)
+          : null;
       if (reading) {
         const ruby = document.createElement('ruby');
         ruby.className = 'rb rb-vocab';

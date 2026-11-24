@@ -3,8 +3,17 @@
  *
  *   1. the shared community lexicon (local, instant, offline)
  *   2. the server-side lookup cache (one fetch per term per deployment)
- *   3. ONLINE DICTIONARIES - Wiktionary REST definitions for every language,
- *      plus dictionaryapi.dev for English (both keyless, free, attributed)
+ *   3. ONLINE DICTIONARIES, in order:
+ *      - Japanese: jisho.org (JMdict/EDRDG, CC BY-SA) - the canonical
+ *        learner dictionary, with readings, and it de-inflects the word
+ *        itself (clicking 食べました finds 食べる)
+ *      - Wiktionary for every language, three routes in order: the REST
+ *        definitions endpoint, then the action=parse page route, then the
+ *        api.wikimedia.org gateway (raw wikitext, parsed by the wikitext
+ *        mapper). The direct routes 403 datacenter traffic while the
+ *        gateway routinely passes - that trio is what fixed the
+ *        "dictionary finds nothing" bug for words like neck/sibling/首
+ *      - dictionaryapi.dev for English (keyless, free, attributed)
  *   4. AI (Gemini) is the explicit, user-triggered fallback via /api/enrich -
  *      it is never called silently here, so quotas stay predictable.
  *
@@ -16,20 +25,59 @@ import { handler, json, body, query, requireString, HttpError, clampNumber } fro
 import { requireUser } from './lib/identity.mjs';
 import { sql } from './lib/db.mjs';
 import { consumeDailyQuota } from './lib/ratelimit.mjs';
-import { fetchJson, mapWiktionaryDefinitions, mapFreeDictionaryApi, WIKTIONARY_PAGE_URL } from './lib/sources.mjs';
+import {
+  fetchJson,
+  fetchJsonHttp2,
+  fetchWikiJson,
+  mapWiktionaryDefinitions,
+  mapWiktionaryParseHtml,
+  mapWiktionaryWikitext,
+  mapFreeDictionaryApi,
+  mapJisho,
+  WIKTIONARY_PAGE_URL,
+  WIKTIONARY_PARSE_URL,
+  WIKTIONARY_GATEWAY_URL,
+  JISHO_SEARCH_URL,
+} from './lib/sources.mjs';
 
 const MAX_TERM = 100;
 
 async function lookupOnline(language, term) {
   const entries = [];
 
-  // Wiktionary REST definitions - covers every language we can name.
+  // Japanese: jisho.org (JMdict) first. Readings (くび) light up furigana in
+  // the reader immediately, and the API handles inflected input.
+  if (language.code === 'ja') {
+    try {
+      const data = await fetchJson(JISHO_SEARCH_URL(term), { timeoutMs: 12000, maxBytes: 2 * 1024 * 1024 });
+      for (const m of mapJisho(data, term)) {
+        entries.push({
+          source: 'jisho',
+          term: m.term,
+          reading: m.reading,
+          part_of_speech: m.part_of_speech,
+          definition: m.definition,
+          examples: m.examples,
+          source_url: `https://jisho.org/search/${encodeURIComponent(term)}`,
+          license: 'cc-by-sa-4.0 (JMdict / EDRDG)',
+          attribution: 'Jisho.org - JMdict (CC BY-SA)',
+        });
+      }
+    } catch {
+      /* jisho unreachable - the chain continues honestly */
+    }
+  }
+
+  // Wiktionary, route 1: REST definitions (when the endpoint answers, it is
+  // the cheapest structured source). fetchWikiJson = HTTP/2 first: the
+  // Wikimedia CDN 403-refuses plain HTTP/1.1 from datacenter ranges.
+  let restAnswered = false;
   try {
-    const wiki = await fetchJson(`https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(term)}`, {
-      timeoutMs: 15000,
+    const wiki = await fetchWikiJson(`https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(term)}`, {
+      timeoutMs: 12000,
     });
-    const mapped = mapWiktionaryDefinitions(wiki, language.code, language.name);
-    for (const m of mapped) {
+    restAnswered = true;
+    for (const m of mapWiktionaryDefinitions(wiki, language.code, language.name)) {
       entries.push({
         source: 'wiktionary',
         part_of_speech: m.part_of_speech,
@@ -41,7 +89,58 @@ async function lookupOnline(language, term) {
       });
     }
   } catch {
-    /* Wiktionary unreachable or no page - the chain continues honestly. */
+    /* blocked (403/429 to datacenter IPs - common 2026) or no page */
+  }
+
+  // Wiktionary, route 2: the action=parse page route (core MediaWiki, the
+  // same API family the wiki imports already use). Only needed when the
+  // REST endpoint did not answer at all.
+  if (!restAnswered && entries.length === 0) {
+    try {
+      const page = await fetchWikiJson(WIKTIONARY_PARSE_URL(term), { timeoutMs: 20000, maxBytes: 4 * 1024 * 1024 });
+      const html = typeof page?.parse?.text === 'string' ? page.parse.text : page?.parse?.text?.['*'];
+      for (const m of mapWiktionaryParseHtml(html, language.code, language.name)) {
+        entries.push({
+          source: 'wiktionary',
+          reading: m.reading,
+          part_of_speech: m.part_of_speech,
+          definition: m.definition,
+          examples: m.examples,
+          source_url: WIKTIONARY_PAGE_URL(term),
+          license: 'cc-by-sa-4.0',
+          attribution: 'Wiktionary (CC BY-SA 4.0)',
+        });
+      }
+    } catch {
+      /* no page under this term on Wiktionary either */
+    }
+  }
+
+  // Wiktionary, route 3: the api.wikimedia.org gateway serving the page's
+  // raw wikitext. Different throttle pool than the direct routes AND fetched
+  // over HTTP/2 (fetchJsonHttp2) - the Wikimedia CDN 403-refuses plain
+  // HTTP/1.1 from whole datacenter ranges (Node's fetch is HTTP/1.1 only),
+  // which is why the first two routes can both die while this one passes
+  // (probed 2026-11).
+  if (entries.length === 0) {
+    try {
+      const page = await fetchJsonHttp2(WIKTIONARY_GATEWAY_URL(term), { timeoutMs: 20000, maxBytes: 4 * 1024 * 1024 });
+      const wikitext = typeof page?.source === 'string' ? page.source : '';
+      for (const m of mapWiktionaryWikitext(wikitext, language.code, language.name)) {
+        entries.push({
+          source: 'wiktionary',
+          reading: m.reading,
+          part_of_speech: m.part_of_speech,
+          definition: m.definition,
+          examples: m.examples,
+          source_url: WIKTIONARY_PAGE_URL(term),
+          license: 'cc-by-sa-4.0',
+          attribution: 'Wiktionary (CC BY-SA 4.0)',
+        });
+      }
+    } catch {
+      /* gateway unreachable or no such page - the chain ends honestly */
+    }
   }
 
   // dictionaryapi.dev - English bonus dictionary, also keyless and free.

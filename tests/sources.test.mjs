@@ -12,6 +12,8 @@ import {
   htmlToText,
   htmlTitle,
   mapWiktionaryDefinitions,
+  mapWiktionaryWikitext,
+  mapWiktionaryParseHtml,
   mapFreeDictionaryApi,
   mapGutendex,
   mapMediawikiSearch,
@@ -28,6 +30,8 @@ import {
   APP_LANGUAGES,
   MW_HOST,
   MW_SEARCH_URL,
+  MW_EXTRACT_URL,
+  validWikiCode,
   aozoraCatalogItems,
   aozoraByRef,
   AOZORA_REF,
@@ -99,11 +103,99 @@ test('wiktionary definitions are mapped for the matching language only', () => {
   assert.deepEqual(out[0].examples, ['猫が鳴いた。']);
 });
 
+test('wiktionary REST definitions: the live object shape is flattened (the neck/sibling root cause)', () => {
+  // The REST endpoint returns {"en": [...]} keyed by language code with
+  // camelCase fields - the old mapper only accepted the bare array, so an
+  // ANSWERING endpoint still produced zero entries (and blocked the parse
+  // fallback). This is the actual "dictionary finds nothing" bug.
+  const json = {
+    en: [
+      {
+        partOfSpeech: 'Noun',
+        language: 'English',
+        languageCode: 'en',
+        definitions: [{ definition: 'The part of the body connecting the head and the trunk.' }],
+      },
+    ],
+    la: [
+      { partOfSpeech: 'Noun', language: 'Latin', languageCode: 'la', definitions: [{ definition: 'colum' }] },
+    ],
+  };
+  const out = mapWiktionaryDefinitions(json, 'en', 'English');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].part_of_speech, 'Noun');
+  assert.equal(out[0].definition, 'The part of the body connecting the head and the trunk.');
+  // Latin section skipped for English lookups
+  assert.equal(mapWiktionaryDefinitions(json, 'la', 'Latin').length, 1);
+  assert.equal(mapWiktionaryDefinitions({ foo: 'not-an-array' }, 'en', 'English').length, 0);
+});
+
 test('wiktionary language matching works via the language name too', () => {
   const json = [{ language: 'Chinese', part_of_speech: 'noun', definitions: [{ definition: 'Chinese entry' }] }];
   const out = mapWiktionaryDefinitions(json, 'zh', 'Chinese');
   assert.equal(out.length, 1);
   assert.equal(out[0].definition, 'Chinese entry');
+});
+
+test('wiktionary wikitext parser: senses, labels, links, ux examples (the neck/sibling fix)', () => {
+  const wikitext = [
+    '==English==',
+    '===Etymology 1===',
+    'From Middle English.',
+    '====Noun====',
+    '# {{lb|en|anatomy}} The part of the body connecting the [[head]] and the trunk.',
+    '#* {{ux|en|The cat slept on the neck of the bottle.}}',
+    "# The part of a shirt which fits a person's neck.",
+    '====Synonyms====',
+    '* {{l|en|collar}}',
+    '===Pronunciation===',
+    '#: this is a usage note, not a sense',
+    '==French==',
+    '===Noun===',
+    '# {{lb|fr|anatomy}} neck',
+    "#* ''Il a mal au cou.''",
+  ].join('\n');
+
+  const en = mapWiktionaryWikitext(wikitext, 'en', 'English');
+  assert.equal(en.length, 2);
+  assert.equal(en[0].part_of_speech, 'noun'); // h4 POS inside the etymology
+  assert.equal(en[0].definition, '(anatomy) The part of the body connecting the head and the trunk.');
+  assert.deepEqual(en[0].examples, ['The cat slept on the neck of the bottle.']);
+  assert.equal(en[1].definition, "The part of a shirt which fits a person's neck.");
+
+  // Only the French section for French; the synonym line ('* {{l|...}}') and
+  // the usage note ('#:') are not senses.
+  const fr = mapWiktionaryWikitext(wikitext, 'fr', 'French');
+  assert.equal(fr.length, 1);
+  assert.equal(fr[0].definition, '(anatomy) neck');
+  assert.deepEqual(fr[0].examples, ['Il a mal au cou.']);
+
+  // Unknown language yields nothing, never a crash.
+  assert.deepEqual(mapWiktionaryWikitext(wikitext, 'de', 'German'), []);
+  assert.deepEqual(mapWiktionaryWikitext('', 'en', 'English'), []);
+  assert.deepEqual(mapWiktionaryWikitext(undefined, 'en', 'English'), []);
+});
+
+test('wiktionary wikitext parser: Japanese headword templates carry the kana reading', () => {
+  const wikitext = ['==Japanese==', '===Noun===', '{{ja-noun|くび|hhira=くび}}', '# {{lb|ja|anatomy}} neck'].join('\n');
+  const ja = mapWiktionaryWikitext(wikitext, 'ja', 'Japanese');
+  assert.equal(ja.length, 1);
+  assert.equal(ja[0].reading, 'くび'); // lights up furigana in the reader
+  assert.equal(ja[0].definition, '(anatomy) neck');
+});
+
+test('wiktionary parse-HTML parser never crashes on li items without nested lists', () => {
+  // Regression: the gateway/Parsoid HTML shape - a bare <li> with no nested
+  // list used to crash mapWiktionaryParseHtml (split()[1] was undefined).
+  const html = [
+    '<h2><span>English</span></h2>',
+    '<h3><span>Noun</span></h3>',
+    '<ol><li>A bare sense with no nested anything.</li></ol>',
+  ].join('');
+  const out = mapWiktionaryParseHtml(html, 'en', 'English');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].definition, 'A bare sense with no nested anything.');
+  assert.deepEqual(out[0].examples, []);
 });
 
 test('free dictionary api entries are mapped with phonetics', () => {
@@ -249,7 +341,11 @@ test('per-language registry: gutenberg only where stocked, aozora leads Japanese
   assert.ok(providersForLanguage('ja').some((p) => p.id === 'gutenberg'));
   assert.equal(providersForLanguage('ko')[0].id, 'wikisource');
   assert.equal(providersForLanguage('fr')[0].id, 'gutenberg');
-  assert.equal(providersForLanguage('tok').some((p) => p.id === 'wikipedia'), false);
+  // Toki Pona's Wikipedia was relaunched on tok.wikipedia.org (verified live
+  // 2026-11 via siteinfo) and its texts live on the multilingual
+  // wikisource.org - so Toki Pona is no longer source-less.
+  assert.equal(providersForLanguage('tok').some((p) => p.id === 'wikipedia'), true);
+  assert.equal(providersForLanguage('tok').some((p) => p.id === 'wikisource'), true);
 });
 
 test('wiki host remap: Norwegian (nb) editions live on the no. subdomain', () => {
@@ -260,6 +356,33 @@ test('wiki host remap: Norwegian (nb) editions live on the no. subdomain', () =>
   assert.ok(GUTENDEX_BROWSE_URL('nb', 1).includes('languages=no'));
   const items = mapMediawikiSearch({ query: { search: [{ title: 'Nord' }] } }, 'wikisource', 'nb', 'x');
   assert.ok(items[0].source_url.startsWith('https://no.wikisource.org/wiki/'));
+});
+
+test('custom wiki edition codes: validation and URL routing (the Maori bridge)', () => {
+  // validWikiCode is the gate for both the catalog search (?wiki=) and the
+  // import (edition override): plain lowercase codes only, host-segment safe.
+  assert.equal(validWikiCode('mi'), 'mi');
+  assert.equal(validWikiCode('scn'), 'scn');
+  assert.equal(validWikiCode('simple'), 'simple');
+  assert.equal(validWikiCode('zh-min-nan'), 'zh-min-nan');
+  assert.equal(validWikiCode('MI'), null); // uppercase rejected
+  assert.equal(validWikiCode(''), null);
+  assert.equal(null ?? validWikiCode(undefined), null);
+  assert.equal(validWikiCode('evil.example.com'), null);
+  assert.equal(validWikiCode('x'), null); // too short (2 chars minimum)
+  assert.equal(validWikiCode('a'.repeat(20)), null); // too long
+
+  // A custom code routes every wiki call to that edition, so a Maori learner
+  // with a differently-coded language still reads mi.wikipedia.org.
+  assert.equal(MW_HOST('wikipedia', 'mi'), 'mi.wikipedia.org');
+  assert.ok(MW_SEARCH_URL('wikipedia', 'mi', 'Aotearoa').startsWith('https://mi.wikipedia.org/w/api.php'));
+  assert.ok(MW_EXTRACT_URL('wikipedia', 'mi', 'Aotearoa').startsWith('https://mi.wikipedia.org/w/api.php'));
+
+  // Catalog items carry the edition in source_url (built from urlLang), so
+  // the UI can stamp data-import-wiki from the same payload.
+  const items = mapMediawikiSearch({ query: { search: [{ title: 'Aotearoa' }] } }, 'wikipedia', 'mri', 'cc-by-sa-4.0', 'mi');
+  assert.equal(items[0].provider, 'wikipedia');
+  assert.ok(items[0].source_url.startsWith('https://mi.wikipedia.org/wiki/Aotearoa'));
 });
 
 test('htmlToText: <rp> fallback parentheses do not leak into the ruby base', () => {

@@ -2695,3 +2695,75 @@ ni li suli: ijo lili li ken kama suli. jan li ken pona tawa ijo. ijo li ken pona
   source_ref = 'Original demonstration text written for this project using core vocabulary only. Longer story form.',
   provenance = 'community'
 WHERE language_code = 'tok' AND title = 'kala lili (the little fish)';
+-- ---------------------------------------------------------------
+-- Portuguese lengthening (2026-11): the single Portuguese text was one
+-- 103-char octave; replaced with the first six stanzas of Canto I
+-- (1.5k chars), transcribed from Project Gutenberg ebook #3333
+-- (Os Lusíadas, original 1572 spelling) via the pglaf.org mirror.
+-- ---------------------------------------------------------------
+DELETE FROM knowledge.shared_texts WHERE language_code = 'pt' AND title = 'Os Lusíadas (opening lines)';
+INSERT INTO knowledge.shared_texts (language_code, title, body, author, source_url, license, provenance, source_ref, topic) VALUES
+  (
+    'pt',
+    'Os Lusíadas, Canto I (estrofes 1-6)',
+    $$As armas e os barões assinalados,
+Que da ocidental praia Lusitana,
+Por mares nunca de antes navegados,
+Passaram ainda além da Taprobana,
+Em perigos e guerras esforçados,
+Mais do que prometia a força humana,
+E entre gente remota edificaram
+Novo Reino, que tanto sublimaram;
+
+E também as memórias gloriosas
+Daqueles Reis, que foram dilatando
+A Fé, o Império, e as terras viciosas
+De África e de Ásia andaram devastando;
+E aqueles, que por obras valerosas
+Se vão da lei da morte libertando;
+Cantando espalharei por toda parte,
+Se a tanto me ajudar o engenho e arte.
+
+Cessem do sábio Grego e do Troiano
+As navegações grandes que fizeram;
+Cale-se de Alexandro e de Trajano
+A fama das vitórias que tiveram;
+Que eu canto o peito ilustre Lusitano,
+A quem Neptuno e Marte obedeceram:
+Cesse tudo o que a Musa antígua canta,
+Que outro valor mais alto se alevanta.
+
+E vós, Tágides minhas, pois criado
+Tendes em mim um novo engenho ardente,
+Se sempre em verso humilde celebrado
+Foi de mim vosso rio alegremente,
+Dai-me agora um som alto e sublimado,
+Um estilo grandíloquo e corrente,
+Porque de vossas águas, Febo ordene
+Que não tenham inveja às de Hipoerene.
+
+Dai-me uma fúria grande e sonorosa,
+E não de agreste avena ou frauta ruda,
+Mas de tuba canora e belicosa,
+Que o peito acende e a cor ao gesto muda;
+Dai-me igual canto aos feitos da famosa
+Gente vossa, que a Marte tanto ajuda;
+Que se espalhe e se cante no universo,
+Se tão sublime preço cabe em verso.
+
+E vós, ó bem nascida segurança
+Da Lusitana antígua liberdade,
+E não menos certíssima esperança
+De aumento da pequena Cristandade;
+Vós, ó novo temor da Maura lança,
+Maravilha fatal da nossa idade,
+Dada ao mundo por Deus, que todo o mande,
+Para do mundo a Deus dar parte grande;$$,
+    'Luís de Camões',
+    'https://www.gutenberg.org/ebooks/3333',
+    'public-domain',
+    'verified',
+    'Os Lusíadas (1572), Canto I, estrofes 1-6. Transcribed from Project Gutenberg ebook #3333 (original spelling edition) via the pglaf.org mirror; the 1572 original is public domain.',
+    'poetry'
+  )
+ON CONFLICT (language_code, title) DO NOTHING;

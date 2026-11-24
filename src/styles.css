@@ -4,6 +4,14 @@
    Light and dark themes via CSS custom properties.
    ===================================================================== */
 
+/* The [hidden] attribute MUST always win: several components below set
+   display:flex/grid on their class, which would otherwise override the
+   UA's [hidden] { display: none } and leave bars permanently on screen
+   (the selection action bar and the reader pager both shipped that bug). */
+[hidden] {
+  display: none !important;
+}
+
 :root {
   --bg: #f7f5f0;
   --bg-raised: #ffffff;

@@ -13,7 +13,8 @@
  * guard every server-side fetch must pass.
  */
 
-import { inflateRawSync } from 'node:zlib';
+import { inflateRawSync, gunzipSync, brotliDecompressSync, inflateSync } from 'node:zlib';
+import { connect as http2Connect } from 'node:http2';
 
 // ---------------------------------------------------------------- guard
 
@@ -138,12 +139,104 @@ export async function fetchTextCapped(rawUrl, { timeoutMs = 30000, maxBytes = 70
   return { text: out, capped };
 }
 
+/** Fetch JSON over HTTP/2 with the same SSRF/size/timeout guards.
+ *
+ * WHY THIS EXISTS: the Wikimedia CDN family (en.wiktionary.org,
+ * api.wikimedia.org, *.wikipedia.org) 403-refuses plain HTTP/1.1 requests
+ * from entire datacenter IP ranges while identical HTTP/2 requests pass -
+ * probed deterministically 2026-11 (curl --http2: 200, curl --http1.1: 403,
+ * interleaved, same term, same UA). Node's fetch (undici) speaks HTTP/1.1
+ * only, so every Wikimedia call made through it can hit that wall. This
+ * helper speaks real HTTP/2 via node:http2 and is used for the Wikimedia
+ * routes that most need it (the lookup chain's gateway fallback).
+ */
+export async function fetchJsonHttp2(rawUrl, { timeoutMs = 20000, maxBytes = 4 * 1024 * 1024 } = {}) {
+  const u = ssrfSafeUrl(rawUrl);
+  return await new Promise((resolve, reject) => {
+    const session = http2Connect(`https://${u.host}`);
+    let settled = false;
+    const done = (fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const fail = (err) => done(() => {
+      session.destroy();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+    const timer = setTimeout(() => fail(new Error('gateway timeout')), timeoutMs);
+    session.on('error', (err) => fail(err));
+    const req = session.request({
+      ':path': `${u.pathname}${u.search}`,
+      'user-agent': 'Linguarium/0.1 (language-learning reading app)',
+      accept: 'application/json',
+    });
+    req.on('error', (err) => fail(err));
+    req.on('response', (headers) => {
+      const status = headers[':status'];
+      const declared = Number(headers['content-length'] ?? 0);
+      if (declared && declared > maxBytes) {
+        fail(new Error(`source too large (${Math.round(declared / 1024)} KB > ${Math.round(maxBytes / 1024)} KB cap)`));
+        return;
+      }
+      const chunks = [];
+      let received = 0;
+      let over = false;
+      req.on('data', (c) => {
+        received += c.byteLength;
+        if (received > maxBytes) {
+          over = true;
+          fail(new Error(`source too large (> ${Math.round(maxBytes / 1024)} KB cap)`));
+          return;
+        }
+        chunks.push(c);
+      });
+      req.on('end', () => {
+        if (over || settled) return;
+        done(() => {
+          session.close();
+          if (status !== 200) {
+            reject(new Error(`source responded ${status}`));
+            return;
+          }
+          let buf = Buffer.concat(chunks);
+          try {
+            const enc = String(headers['content-encoding'] ?? '').toLowerCase();
+            if (enc === 'gzip') buf = gunzipSync(buf);
+            else if (enc === 'br') buf = brotliDecompressSync(buf);
+            else if (enc === 'deflate') buf = inflateSync(buf);
+            resolve(JSON.parse(buf.toString('utf-8')));
+          } catch (err) {
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
+        });
+      });
+    });
+    req.end();
+  });
+}
+
 export async function fetchJson(rawUrl, opts) {
   const text = await fetchText(rawUrl, opts);
   try {
     return JSON.parse(text);
   } catch {
     throw new Error('source did not return JSON');
+  }
+}
+
+/** JSON fetch for Wikimedia API hosts: HTTP/2 first, undici fallback. The
+ *  Wikimedia CDN 403-refuses plain HTTP/1.1 from whole datacenter ranges
+ *  while Node's fetch (undici) speaks HTTP/1.1 only - over HTTP/2 the same
+ *  request passes (probed 2026-11), so every *.wikipedia.org /
+ *  *.wikisource.org / en.wiktionary.org / api.wikimedia.org call goes
+ *  through here. */
+export async function fetchWikiJson(url, opts) {
+  try {
+    return await fetchJsonHttp2(url, opts);
+  } catch {
+    return await fetchJson(url, opts);
   }
 }
 
@@ -223,16 +316,24 @@ function normLang(s) {
 
 /**
  * Map the Wiktionary REST `/page/definition/{term}` response to entries for
- * one target language. Response shape: [{ language, language_code,
- * part_of_speech, definitions: [{ definition, examples, links, ... }] }].
+ * one target language. Response shape: an object keyed by language code
+ * ({"en": [{ partOfSpeech, language, languageCode, definitions: [...] }]}
+ * - the live 2026-11 shape; some historical docs describe the bare array,
+ * which is accepted too).
  */
 export function mapWiktionaryDefinitions(json, languageCode, languageName) {
-  const rows = Array.isArray(json) ? json : [];
+  // The REST endpoint returns an object keyed by language code
+  // ({"en": [...], "fr": [...]}) - flatten it; an array passes through.
+  const rows = Array.isArray(json)
+    ? json
+    : json && typeof json === 'object'
+      ? Object.values(json).flat()
+      : [];
   const wantCode = String(languageCode).toLowerCase();
   const wantName = normLang(languageName);
   const out = [];
   for (const section of rows) {
-    const code = String(section?.language_code ?? '').toLowerCase();
+    const code = String(section?.language_code ?? section?.languageCode ?? '').toLowerCase();
     const name = normLang(section?.language);
     const matches =
       (code && code === wantCode) ||
@@ -247,7 +348,12 @@ export function mapWiktionaryDefinitions(json, languageCode, languageName) {
         ? d.examples.map((e) => (typeof e === 'string' ? e : e?.text)).filter((t) => typeof t === 'string').slice(0, 2)
         : [];
       out.push({
-        part_of_speech: typeof section?.part_of_speech === 'string' ? section.part_of_speech : null,
+        part_of_speech:
+          typeof section?.part_of_speech === 'string'
+            ? section.part_of_speech
+            : typeof section?.partOfSpeech === 'string'
+              ? section.partOfSpeech
+              : null,
         definition: text.slice(0, 500),
         examples: examples.map((t) => t.slice(0, 250)),
       });
@@ -280,6 +386,278 @@ export function mapFreeDictionaryApi(json) {
 }
 
 export const WIKTIONARY_PAGE_URL = (term) => `https://en.wiktionary.org/wiki/${encodeURIComponent(term)}`;
+
+/** The action=parse route for a Wiktionary page (core MediaWiki, works
+ *  wherever the REST definitions endpoint is blocked or deprecated - it
+ *  403s datacenter traffic and returns nothing for many valid terms). */
+export const WIKTIONARY_PARSE_URL = (term) =>
+  `https://en.wiktionary.org/w/api.php?${new URLSearchParams({
+    action: 'parse',
+    page: String(term).slice(0, 200),
+    prop: 'text',
+    redirects: '1',
+    format: 'json',
+  })}`;
+
+/** The Wikimedia API gateway route for the same page: returns JSON with the
+ *  page's raw wikitext under `source`. It draws from a different throttle
+ *  pool than the per-wiki api.php / rest_v1 routes - datacenter IPs that get
+ *  hard 403s on en.wiktionary.org routinely pass through api.wikimedia.org
+ *  (probed 2026-11) - which makes it the last-resort route of the lookup
+ *  chain when the direct ones are blocked. */
+export const WIKTIONARY_GATEWAY_URL = (term) =>
+  `https://api.wikimedia.org/core/v1/wiktionary/en/page/${encodeURIComponent(String(term).slice(0, 200))}`;
+
+/** Clean one wikitext definition line to readable text: label templates
+ *  become parentheticals, other templates vanish, links keep their display,
+ *  quotes/tags/comments go away. */
+function cleanWikitext(line) {
+  return String(line ?? '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    // Label/qualifier templates render as parentheticals: drop the template
+    // name and the language-code parameter, keep the labels themselves.
+    .replace(/\{\{(?:lb|label|qualifier|qual|n-g)\s*\|([^{}]*)\}\}/gi, (m, params) => {
+      const labels = params
+        .split('|')
+        .slice(1)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      return labels.length ? `(${labels.join(', ')})` : '';
+    })
+    .replace(/\{\{[^{}]*\}\}/g, ' ')
+    .replace(/\{\{[^{}]*\}\}/g, ' ') // second pass: one nesting level
+    .replace(/\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g, '$1')
+    .replace(/<\/?[a-z][^>]*>/gi, ' ')
+    .replace(/''+/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+const WIKTIONARY_POS_SKIP =
+  /^(pronunciation|etymology|see also|references|anagrams|further reading|statistics|translations|descendants|related terms|coordinate terms|derived terms|inflection|conjugation|mutation|homophones|rhymes|hypernyms|hyponyms|synonyms|antonyms|usage notes|compounds|gallery|notes)$/i;
+
+/**
+ * Parse raw Wiktionary WIKITEXT (the gateway's `source` field) into
+ * definitions for one target language. Wikitext structure is far more
+ * stable across skins/parsers than the rendered HTML:
+ *
+ *   ==English==
+ *   ===Noun===
+ *   # {{lb|en|anatomy}} The part of the body connecting the head and trunk.
+ *   #* {{ux|en|The neck of the bottle.}}
+ *
+ * Returns [{ part_of_speech, definition, examples, reading }].
+ */
+export function mapWiktionaryWikitext(wikitext, languageCode, languageName) {
+  const source = String(wikitext ?? '');
+  if (!source) return [];
+  const wantName = normLang(languageName);
+  const aliases = WIKTIONARY_LANG_ALIASES[String(languageCode).toLowerCase()] ?? [];
+  const wanted = new Set([wantName, ...aliases].filter(Boolean));
+
+  // Language sections: spans between "== Name ==" headings.
+  const heads = [...source.matchAll(/^[ \t]*==[ \t]*([^=\n]+?)[ \t]*==[ \t]*$/gm)];
+  for (let i = 0; i < heads.length; i += 1) {
+    const sectionLang = normLang(heads[i][1]);
+    if (!wanted.has(sectionLang)) continue;
+    const section = source.slice(heads[i].index + heads[i][0].length, heads[i + 1]?.index ?? source.length);
+
+    // Japanese reading: the headword templates carry it as first kana param
+    // ({{ja-noun|くび}}, {{ja-verb|たべる}}) - this lights up furigana in the
+    // reader even when jisho is unreachable.
+    const kanaReading = section.match(/\{\{ja-(?:noun|verb|adverb|adjective|adj|phrase|pronoun|counter|conjunction|interjection|particle|pos)[^}]*\|\s*([ぁ-ゖァ-ヺー・]+)/);
+
+    // POS subsections: spans between "=== Name ===" headings. Some entries
+    // nest the POS one level deeper inside an etymology ("===Etymology 1==="
+    // then "====Noun===="), so each h3 span is itself scanned for h4 POS
+    // headings first - only a span with no h4 POS is treated as a POS body.
+    const subs = [...section.matchAll(/^[ \t]*===[ \t]*([^=\n]+?)[ \t]*===[ \t]*$/gm)];
+    const out = [];
+    const senseBlocks = []; // [{ pos, body }]
+    for (let j = 0; j < subs.length; j += 1) {
+      const pos = normLang(subs[j][1]);
+      const body = section.slice(subs[j].index + subs[j][0].length, subs[j + 1]?.index ?? section.length);
+      const h4s = [...body.matchAll(/^[ \t]*====[ \t]*([^=\n]+?)[ \t]*====[ \t]*$/gm)];
+      if (h4s.length > 0) {
+        // The slice of the h3 body BEFORE its first h4 belongs to the h3
+        // itself (a "===Noun===" often holds its senses first, then nests
+        // "====Synonyms====" etc. below) - keep it, then each h4 block.
+        const prologue = body.slice(0, h4s[0].index);
+        if (prologue.trim()) senseBlocks.push({ pos, body: prologue });
+        for (let k = 0; k < h4s.length; k += 1) {
+          senseBlocks.push({
+            pos: normLang(h4s[k][1]),
+            body: body.slice(h4s[k].index + h4s[k][0].length, h4s[k + 1]?.index ?? body.length),
+          });
+        }
+      } else {
+        senseBlocks.push({ pos, body });
+      }
+    }
+    for (const { pos, body } of senseBlocks) {
+      if (!pos || WIKTIONARY_POS_SKIP.test(pos)) continue;
+
+      for (const line of body.split('\n')) {
+        // A definition line starts with '#' but not '#:' (usage notes) or
+        // '#*' (examples, collected right after their sense).
+        if (!/^#[^:#*\n]/.test(line)) continue;
+        const definition = cleanWikitext(line.replace(/^#+\s*/, ''));
+        if (!definition || definition.length < 2) continue;
+        // Examples: the '#*' lines directly under this sense; {{ux|en|...}}
+        // carries the example text as its second parameter.
+        const after = body.slice(body.indexOf(line) + line.length);
+        const examples = [];
+        for (const exLine of after.split('\n')) {
+          if (!/^\s*#\*/.test(exLine)) {
+            if (/^\s*#/.test(exLine)) break; // next sense
+            continue;
+          }
+          const ux = exLine.match(/\{\{ux[a-z]*\s*\|[^|]*\|([^}]+)\}\}/i);
+          const text = cleanWikitext(ux ? ux[1] : exLine.replace(/^\s*#\*\s*/, ''));
+          if (text && text.length >= 3 && !/^\(/.test(text)) examples.push(text.slice(0, 250));
+          if (examples.length >= 2) break;
+        }
+        out.push({
+          part_of_speech: pos,
+          definition: definition.slice(0, 500),
+          examples,
+          reading: kanaReading ? kanaReading[1] : null,
+        });
+        if (out.length >= 8) return out;
+      }
+    }
+    if (out.length > 0) return out;
+  }
+  return [];
+}
+
+function stripTags(html) {
+  return decodeEntities(
+    String(html ?? '')
+      .replace(/<[^>]+>/g, ' '),
+  )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Wiktionary language-section aliases: the h2 heading text vs the app's
+ *  language names (DB) - the mismatches that actually occur. */
+const WIKTIONARY_LANG_ALIASES = {
+  zh: ['chinese'],
+  nb: ['norwegian bokmål', 'norwegian bokmal', 'norwegian nynorsk', 'norwegian'],
+  no: ['norwegian bokmål', 'norwegian bokmal', 'norwegian'],
+  pt: ['portuguese'],
+  tl: ['tagalog'],
+  haw: ['hawaiian'],
+  fa: ['persian'],
+  el: ['greek'],
+  tok: ['toki pona'],
+};
+
+/**
+ * Parse the full-page HTML of a Wiktionary entry (action=parse&prop=text)
+ * into definitions for one target language.
+ *
+ * Structure on en.wiktionary: language sections are <h2> headings ("Japanese",
+ * "English", ...), each containing <h3> part-of-speech sections whose <ol><li>
+ * items are the senses. The 2024+ skin wraps headings in divs, so the parser
+ * splits on <h2 boundaries instead of assuming a specific wrapper. Tolerant by
+ * design: any unexpected shape yields fewer entries, never a crash.
+ * Returns [{ part_of_speech, definition, examples, reading }].
+ */
+export function mapWiktionaryParseHtml(html, languageCode, languageName) {
+  const source = String(html ?? '');
+  if (!source) return [];
+  const wantName = normLang(languageName);
+  const aliases = WIKTIONARY_LANG_ALIASES[String(languageCode).toLowerCase()] ?? [];
+  const wanted = new Set([wantName, ...aliases].filter(Boolean));
+
+  // Language sections: everything between one <h2 and the next <h2.
+  // Keep only the chunks that BEGIN with an h2 (the slice of text before the
+  // first heading is preamble, not a section) - a page whose content starts
+  // directly with <h2> must not lose that first section to a blind .slice(1).
+  const chunks = source.split(/(?=<h2\b)/i).filter((c) => /^<h2\b/i.test(c));
+  for (const chunk of chunks) {
+    const head = chunk.match(/<h2[^>]*>([\s\S]*?)<\/h2\s*>/i);
+    if (!head) continue;
+    const sectionLang = normLang(stripTags(head[1]));
+    if (!wanted.has(sectionLang)) continue;
+
+    const out = [];
+    // Japanese entries carry the reading in the headword line, e.g.
+    // "首 (hiragana くび, romaji kubi)".
+    const kanaReading = chunk.match(/hiragana\s+([ぁ-ゖァ-ヺー]+)/);
+
+    // POS subsections (<h3>); the slice before the first h3 is usually
+    // pronunciation/etymology and carries no numbered senses.
+    const parts = chunk.slice(head.index + head[0].length).split(/(?=<h3\b)/i);
+    for (const part of parts) {
+      const posHead = part.match(/<h3[^>]*>([\s\S]*?)<\/h3\s*>/i);
+      if (!posHead) continue;
+      const pos = stripTags(posHead[1]).toLowerCase();
+      if (/^(pronunciation|etymology|see also|references|anagrams|further reading)$/.test(pos)) continue;
+      const body = part.slice(posHead.index + posHead[0].length);
+      for (const li of body.matchAll(/<li[^>]*>([\s\S]*?)<\/li\s*>/gi)) {
+        // Stop the sense text at the first nested list/dl (sub-senses,
+        // quotations and examples live there). The remainder may be absent
+        // (a bare sense with no examples) - never assume it exists.
+        const liParts = li[1].split(/<(?:ol|ul|dl)\b/i);
+        const definition = stripTags(liParts[0]);
+        if (!definition || definition.length < 2) continue;
+        // Examples: italic runs in the remainder of the <li>.
+        const examples = [...(liParts[1] ?? '').matchAll(/<i[^>]*>([^<]{3,200})<\/i\s*>/gi)]
+          .map((m) => stripTags(m[1]))
+          .filter((t) => t && !/^\(/.test(t))
+          .slice(0, 2);
+        out.push({
+          part_of_speech: pos || null,
+          definition: definition.slice(0, 500),
+          examples,
+          reading: kanaReading ? kanaReading[1] : null,
+        });
+        if (out.length >= 8) return out;
+      }
+    }
+    if (out.length > 0) return out;
+  }
+  return [];
+}
+
+// ---------------------------------------------------------------- jisho (japanese)
+
+/** jisho.org search API (unofficial but stable, keyless; backed by JMdict /
+ *  EDRDG data, CC BY-SA). Handles inflected input itself (食べました finds
+ *  食べる), which is exactly what a reader clicking a word in a sentence
+ *  needs. Only entries that actually match the term are kept - the search
+ *  is fuzzy and happily returns neighbouring words. */
+export const JISHO_SEARCH_URL = (term) =>
+  `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(String(term).slice(0, 100))}`;
+
+export function mapJisho(json, term) {
+  const rows = Array.isArray(json?.data) ? json.data : [];
+  const matches = (d) =>
+    d?.slug === term || (Array.isArray(d?.japanese) && d.japanese.some((j) => j?.word === term || j?.reading === term));
+  const exact = rows.filter(matches);
+  const pool = exact.length > 0 ? exact : rows;
+  const out = [];
+  for (const d of pool.slice(0, 4)) {
+    const word = d?.japanese?.[0]?.word ?? d?.japanese?.[0]?.reading ?? null;
+    const reading = (d?.japanese ?? []).find((j) => j?.reading)?.reading ?? null;
+    for (const sense of (d?.senses ?? []).slice(0, 3)) {
+      const defs = (sense?.english_definitions ?? []).filter((x) => typeof x === 'string' && x.trim());
+      if (!defs.length) continue;
+      out.push({
+        term: word,
+        reading,
+        part_of_speech: (sense?.parts_of_speech ?? [])[0] ?? null,
+        definition: defs.join('; ').slice(0, 500),
+        examples: [],
+      });
+      if (out.length >= 6) return out;
+    }
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------- gutendex
 
@@ -318,13 +696,24 @@ export function gutendexPageInfo(json) {
  *  answering empty. */
 const GUTENDEX_LANG = (lang) => (lang === 'nb' ? 'no' : lang);
 
-export const GUTENDEX_BROWSE_URL = (language, page = 1) => {
+export const GUTENDEX_BROWSE_URL = (language, page = 1, topic = null) => {
   const params = new URLSearchParams();
   const lang = GUTENDEX_LANG(language);
   if (lang && lang !== 'en') params.set('languages', lang);
+  // Topic filter (Gutendex `topic=` matches the book's subjects): the fiction
+  // genres answer the "everything is wiki articles, nothing fictional"
+  // complaint for the 29 Gutenberg-stocked languages.
+  if (topic && GUTENBERG_TOPICS.includes(topic)) params.set('topic', topic);
   params.set('page', String(Math.min(100, Math.max(1, page || 1))));
   return `https://gutendex.com/books/?${params.toString()}`;
 };
+
+/** Curated Gutendex topic slugs (validated allowlist - the param is only
+ *  appended when it is one of these, never echoed raw). */
+export const GUTENBERG_TOPICS = [
+  'fiction', 'short stories', 'fairy tales', 'poetry', 'children',
+  'drama', 'adventure', 'fantasy', 'humor', 'mystery',
+];
 
 export const GUTENDEX_SEARCH_URL = (q, language, page = 1) => {
   const params = new URLSearchParams();
@@ -350,10 +739,14 @@ export const GUTENBERG_TEXT_URLS = (id) => [
 // ---------------------------------------------------------------- mediawiki
 
 /** Norwegian (bokmål) wiki editions live on the 'no' subdomain, the app
- *  language code is 'nb'. Wikipedia itself DOES use nb - hence the
- *  wikipedia-only exclusion below. */
-const WIKI_HOST_LANG = (lang) => (lang === 'nb' ? 'no' : lang);
-export const MW_HOST = (project, lang) => `${project === 'wikipedia' ? lang : WIKI_HOST_LANG(lang)}.${project}.org`;
+ *  language code is 'nb'. Toki Pona has no Wikisource subdomain of its own:
+ *  its texts sit on the multilingual wikisource.org (its Wikipedia, relaunched
+ *  2022 after the 2005 closure, does live on tok.wikipedia.org). */
+const WIKI_HOST_OVERRIDES = {
+  nb: { wikisource: 'no.wikisource.org', wikibooks: 'no.wikibooks.org', wikinews: 'no.wikinews.org' },
+  tok: { wikisource: 'wikisource.org' },
+};
+export const MW_HOST = (project, lang) => WIKI_HOST_OVERRIDES[lang]?.[project] ?? `${lang}.${project}.org`;
 
 export const MW_SEARCH_URL = (project, lang, q) => {
   const params = new URLSearchParams({
@@ -366,8 +759,33 @@ export const MW_SEARCH_URL = (project, lang, q) => {
   return `https://${MW_HOST(project, lang)}/w/api.php?${params.toString()}`;
 };
 
-/** Map a MediaWiki list=search response to catalog items. */
-export function mapMediawikiSearch(json, project, lang, license) {
+/** Default wiki shelf when nothing was typed: the edition's most-viewed
+ *  articles (Wikipedia - real "what people actually read here" content)
+ *  or the first main-namespace pages (the other projects, which have no
+ *  mostviewed data worth trusting). The old default searched the literal
+ *  word "recommended", which matches nothing on non-Latin wikis - that is
+ *  why Persian Wikisource looked empty. */
+export const MW_MOSTVIEWED_URL = (project, lang) =>
+  `https://${MW_HOST(project, lang)}/w/api.php?${new URLSearchParams({
+    action: 'query',
+    list: 'mostviewed',
+    pvimlimit: '40',
+    format: 'json',
+  })}`;
+
+export const MW_ALLPAGES_URL = (project, lang) =>
+  `https://${MW_HOST(project, lang)}/w/api.php?${new URLSearchParams({
+    action: 'query',
+    list: 'allpages',
+    apnamespace: '0',
+    aplimit: '40',
+    format: 'json',
+  })}`;
+
+/** Map a MediaWiki list=search response to catalog items. `urlLang` is the
+ *  code used to build source links - it can differ from `lang` (the app
+ *  language the text will be saved under) when a custom wiki code was used. */
+export function mapMediawikiSearch(json, project, lang, license, urlLang = lang) {
   const hits = json?.query?.search ?? [];
   return hits.slice(0, 20).map((h) => ({
     provider: project,
@@ -375,10 +793,44 @@ export function mapMediawikiSearch(json, project, lang, license) {
     title: String(h.title).slice(0, 300),
     author: project === 'wikipedia' ? 'Wikipedia contributors' : null,
     language: lang,
-    source_url: `https://${MW_HOST(project, lang)}/wiki/${encodeURIComponent(String(h.title).replace(/ /g, '_'))}`,
+    source_url: `https://${MW_HOST(project, urlLang)}/wiki/${encodeURIComponent(String(h.title).replace(/ /g, '_'))}`,
     license,
     description: typeof h?.snippet === 'string' ? h.snippet.replace(/<[^>]+>/g, '').slice(0, 200) : null,
   }));
+}
+
+function mwTitleItem(project, lang, license, urlLang, title, description) {
+  return {
+    provider: project,
+    ref: String(title),
+    title: String(title).slice(0, 300),
+    author: project === 'wikipedia' ? 'Wikipedia contributors' : null,
+    language: lang,
+    source_url: `https://${MW_HOST(project, urlLang)}/wiki/${encodeURIComponent(String(title).replace(/ /g, '_'))}`,
+    license,
+    description: description ?? null,
+  };
+}
+
+const SKIP_TITLES = /^(main page|accueil|hauptseite|portada|portal|wikipedia|wikisource|main page|메인|홈|メインページ|首页|首頁)$/i;
+
+/** mostviewed rows -> catalog items (drop service pages like the Main Page). */
+export function mapMwMostviewed(json, project, lang, license, urlLang = lang) {
+  const rows = json?.query?.mostviewed ?? [];
+  return rows
+    .filter((r) => typeof r?.title === 'string' && r.title && !r.title.includes(':') && !SKIP_TITLES.test(r.title.trim()))
+    .slice(0, 20)
+    .map((r) => mwTitleItem(project, lang, license, urlLang, r.title));
+}
+
+/** allpages rows -> catalog items (main namespace only; special/talk pages
+ *  carry ':' in the title and are dropped). */
+export function mapMwAllpages(json, project, lang, license, urlLang = lang) {
+  const rows = json?.query?.allpages ?? [];
+  return rows
+    .filter((r) => typeof r?.title === 'string' && r.title && !r.title.includes(':'))
+    .slice(0, 20)
+    .map((r) => mwTitleItem(project, lang, license, urlLang, r.title));
 }
 
 export const MW_EXTRACT_URL = (project, lang, title) => {
@@ -461,15 +913,35 @@ export function parseRss(xml) {
 // ---------------------------------------------------------------- curated feeds
 
 /**
- * Curated news feeds: only stable, well-known, keyless feeds. Each row names
- * its license situation honestly - the article page is the authority.
+ * Curated news feeds: only stable, well-known, keyless feeds, every one
+ * live-verified from a datacenter IP (2026-11). France 24's RSS now refuses
+ * datacenter traffic (403), so French is served by Le Monde instead; the
+ * list favors broadcasters that welcome syndication (BBC World Service
+ * languages, Deutsche Welle, Al Jazeera, ANSA) plus the Korean daily
+ * 한겨레 (Hankyoreh), which keeps a clean open RSS. Each row names its
+ * license situation honestly - the article page is the authority.
  */
 export const NEWS_FEEDS = [
   { language: 'en', name: 'BBC News (World)', url: 'https://feeds.bbci.co.uk/news/world/rss.xml' },
+  { language: 'en', name: 'Al Jazeera (English)', url: 'https://www.aljazeera.com/xml/rss/all.xml' },
   { language: 'en', name: 'Deutsche Welle (English)', url: 'https://rss.dw.com/xml/rss-en-all' },
+  { language: 'fr', name: 'Le Monde (à la une)', url: 'https://www.lemonde.fr/rss/une.xml' },
   { language: 'de', name: 'Deutsche Welle (Deutsch)', url: 'https://rss.dw.com/xml/rss-de-all' },
-  { language: 'fr', name: 'France 24 (Français)', url: 'https://www.france24.com/fr/rss' },
+  { language: 'es', name: 'BBC Mundo', url: 'https://feeds.bbci.co.uk/mundo/rss.xml' },
   { language: 'es', name: 'Deutsche Welle (Español)', url: 'https://rss.dw.com/xml/rss-es-all' },
+  { language: 'pt', name: 'BBC Brasil', url: 'https://feeds.bbci.co.uk/portuguese/rss.xml' },
+  { language: 'it', name: 'ANSA (Italia)', url: 'https://www.ansa.it/sito/ansait_rss.xml' },
+  { language: 'ru', name: 'BBC News (Русская служба)', url: 'https://feeds.bbci.co.uk/russian/rss.xml' },
+  { language: 'ru', name: 'Deutsche Welle (Русский)', url: 'https://rss.dw.com/xml/rss-ru-all' },
+  { language: 'uk', name: 'BBC News (Ukrainian)', url: 'https://feeds.bbci.co.uk/ukrainian/rss.xml' },
+  { language: 'ar', name: 'Al Jazeera (العربية)', url: 'https://www.aljazeera.net/aljazeerarss/a7c186be-1baa-4bd4-9d80-a84db769f779/73d0e1b4-532f-45ef-b1f3-1f2c90c5cc61' },
+  { language: 'ar', name: 'Deutsche Welle (عربي)', url: 'https://rss.dw.com/rdf/rss-ar-all' },
+  { language: 'fa', name: 'BBC News (Persian)', url: 'https://feeds.bbci.co.uk/persian/rss.xml' },
+  { language: 'hi', name: 'BBC News (हिन्दी)', url: 'https://feeds.bbci.co.uk/hindi/rss.xml' },
+  { language: 'zh', name: 'BBC 中文 (简体)', url: 'https://feeds.bbci.co.uk/zhongwen/simp/rss.xml' },
+  { language: 'ja', name: 'BBC News Japan', url: 'https://feeds.bbci.co.uk/japanese/rss.xml' },
+  { language: 'ko', name: '한겨레 (Hankyoreh)', url: 'https://www.hani.co.kr/rss/' },
+  { language: 'tr', name: 'BBC News (Türkçe)', url: 'https://feeds.bbci.co.uk/turkce/rss.xml' },
 ];
 
 // ---------------------------------------------------------------- per-language registry
@@ -491,7 +963,9 @@ export const GUTENBERG_LANGUAGES = [
 ];
 
 /** Languages with their own Wikisource edition (per the wikisource.org portal,
- *  2026-11): effectively every language this app ships. */
+ *  2026-11): effectively every language this app ships. Toki Pona keeps its
+ *  entry: it has no subdomain of its own, but WIKI_HOST_OVERRIDES points it
+ *  at the multilingual wikisource.org, which hosts its texts. */
 export const WIKISOURCE_LANGUAGES = [
   'en', 'fr', 'es', 'pt', 'it', 'ca', 'de', 'nl', 'sv', 'da', 'nb', 'fi', 'is', 'pl', 'cs',
   'sk', 'hu', 'ro', 'bg', 'ru', 'uk', 'el', 'la', 'eo', 'tr', 'sq', 'lt', 'lv', 'et', 'cy',
@@ -513,13 +987,14 @@ export const WIKIBOOKS_LANGUAGES = [
   'kn', 'ml', 'th', 'zh', 'ja', 'ko',
 ];
 
-/** Languages with a Wikipedia edition - every app language except Toki Pona
- *  (its Wikipedia was closed in 2005; texts in Toki Pona exist on Wikisource). */
+/** Languages with a Wikipedia edition - every app language, including Toki
+ *  Pona (its Wikipedia was relaunched on tok.wikipedia.org in 2022 after the
+ *  2005 closure - the old "nothing for Toki Pona" situation is fixed). */
 export const WIKIPEDIA_LANGUAGES = [
   'en', 'fr', 'es', 'pt', 'it', 'ca', 'de', 'nl', 'sv', 'da', 'nb', 'fi', 'is', 'pl', 'cs',
   'sk', 'hu', 'ro', 'bg', 'ru', 'uk', 'el', 'la', 'eo', 'tr', 'sq', 'lt', 'lv', 'et', 'cy',
   'ga', 'haw', 'af', 'id', 'ms', 'tl', 'sw', 'vi', 'ar', 'he', 'fa', 'ur', 'ps', 'hi', 'bn',
-  'ta', 'te', 'kn', 'ml', 'th', 'lo', 'km', 'my', 'zh', 'ja', 'ko',
+  'ta', 'te', 'kn', 'ml', 'th', 'lo', 'km', 'my', 'zh', 'ja', 'ko', 'tok',
 ];
 
 /** The app's 56 languages (from the seed), used to sanity-check the registry. */
@@ -768,18 +1243,58 @@ export const PROVIDERS = {
   },
   news: {
     label: 'News feeds',
-    blurb: 'Curated stable RSS feeds (BBC, DW, France 24). Article pages are the licensing authority.',
-    languages: ['en', 'de', 'fr', 'es'],
+    blurb: 'Curated stable RSS feeds (BBC World Service languages, Deutsche Welle, Al Jazeera, ANSA, Le Monde, Hankyoreh). Article pages are the licensing authority.',
+    languages: [...new Set(NEWS_FEEDS.map((f) => f.language))],
     priority: 6,
+  },
+  // The custom-edition bridge: a user-added language (Maori, Sicilian, a
+  // conlang...) reads any wiki whose code the user types - mi.wikipedia.org,
+  // scn.wikipedia.org, and so on. Offered for every language; the UI shows
+  // a code field whenever one of these is selected.
+  'wikipedia-custom': {
+    label: 'Wikipedia (custom edition)',
+    blurb: 'Any Wikipedia edition by its language code - type "mi" for Maori, "scn" for Sicilian, "simple" for Simple English.',
+    languages: null,
+    priority: 40,
+    needsCode: true,
+  },
+  'wikisource-custom': {
+    label: 'Wikisource (custom edition)',
+    blurb: 'Any Wikisource edition by its language code - type "mi" for Maori, "nap" for Neapolitan.',
+    languages: null,
+    priority: 41,
+    needsCode: true,
   },
 };
 
-/** Providers that serve a language, in recommended order. */
+/** Providers that serve a language, in recommended order. Custom-edition
+ *  providers are excluded here - they are appended by the catalog endpoint
+ *  only where the built-in edition is missing (see catalog.mjs). */
 export function providersForLanguage(language) {
   return Object.entries(PROVIDERS)
-    .filter(([, meta]) => (meta.languages ?? []).includes(language))
+    .filter(([, meta]) => !meta.needsCode && (meta.languages ?? []).includes(language))
     .map(([id, meta]) => ({ id, ...meta, languages: undefined }))
     .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
+}
+
+/** Validate a user-supplied wiki language code (host segment safety). */
+export function validWikiCode(raw) {
+  return typeof raw === 'string' && /^[a-z][a-z0-9-]{1,11}$/.test(raw) ? raw : null;
+}
+
+/** Does {code}.{project}.org exist and answer its API? Used to light up the
+ *  plain Wikipedia/Wikisource providers for custom languages whose own code
+ *  happens to be a real edition code (Maori "mi"). Cheap (siteinfo), memoized
+ *  by the caller. HTTP/2 first like every Wikimedia call. */
+export async function wikiEditionExists(code, project) {
+  try {
+    const data = await fetchWikiJson(`https://${MW_HOST(project, code)}/w/api.php?${new URLSearchParams({ action: 'query', meta: 'siteinfo', format: 'json' })}`, {
+      timeoutMs: 6000,
+    });
+    return Boolean(data?.query?.general?.server);
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------- memo cache
