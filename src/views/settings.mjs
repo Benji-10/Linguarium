@@ -226,6 +226,20 @@ export async function renderSettings(container) {
           toast(err.message ?? 'Could not remove it.', 'neg');
         }
       });
+      // Library edition (custom languages): the wiki code the open sources
+      // read for this language. Defined ONCE here; the library tab, the
+      // catalog and the imports all use it without asking again.
+      row.querySelector('.pm-edition')?.addEventListener('change', async (e) => {
+        const edition = e.target.value.trim().toLowerCase();
+        try {
+          await api('/api/languages', { method: 'PUT', body: { code, source_edition: edition } });
+          await loadLanguages();
+          toast(edition ? `Library edition saved: ${edition} - every source now reads it.` : 'Library edition cleared - sources will ask for a code again.', 'pos');
+        } catch (err) {
+          toast(err.message ?? 'Could not save the edition.', 'neg');
+          e.target.value = '';
+        }
+      });
     });
   };
 
@@ -237,6 +251,8 @@ export async function renderSettings(container) {
         <form class="stack">
           <label>Name <input id="l-name" required maxlength="80" placeholder="e.g. Solresol"></label>
           <label>Code (2-16 chars) <input id="l-code" required maxlength="16" pattern="[a-z][a-z0-9-]+" placeholder="e.g. srs"></label>
+          <label>Library edition (optional) <input id="l-edition" maxlength="12" placeholder="wiki code the sources read, e.g. mi, scn, simple">
+            <span class="muted small">If the language code is not itself a wiki edition, this is the edition the open library reads - define it once here and every source uses it.</span></label>
           <label>Direction <select id="l-direction"><option value="ltr">left-to-right</option><option value="rtl">right-to-left</option></select></label>
           <label>Tokenizer
             <div class="tok-options">
@@ -264,6 +280,7 @@ export async function renderSettings(container) {
             name: g('l-name'),
             code: g('l-code'),
             direction: g('l-direction'),
+            source_edition: g('l-edition') || null,
             tokenizer: {
               charLevel: c('l-charlevel'),
               caseFold: c('l-casefold'),
@@ -647,6 +664,13 @@ function profileRowHtml(p, glossOptions) {
           ${glossOptions.replace(`value="${p.gloss_language}"`, `value="${p.gloss_language}" selected`)}
         </select>
       </label>
+      ${
+        lang?.kind === 'custom'
+          ? `<label class="pm-edition-label" title="The wiki language code the open library reads for this language (defined once, used by every source). Leave empty to be asked per search.">Library edition
+            <input class="pm-edition" maxlength="12" placeholder="e.g. mi, scn, simple" value="${esc(lang?.source_edition ?? '')}">
+          </label>`
+          : ''
+      }
       <button class="icon-btn pm-remove" title="Remove this profile">${icon('trash')}</button>
     </div>
   </div>`;

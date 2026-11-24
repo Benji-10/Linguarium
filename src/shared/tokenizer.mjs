@@ -4,9 +4,12 @@
  * Languages are described by a small tokenizer configuration, so any
  * language - including constructed languages like Toki Pona or a user's
  * own custom language - works the same way. The configuration comes from
- * the knowledge.languages table (see sql/seed.sql):
+ * the knowledge.languages table (see sql/seed.sql); the store injects the
+ * language code as `code` so char-level languages segment with the right
+ * ICU dictionary:
  *
  *   {
+ *     code:            'ja'   -> language code (Intl.Segmenter locale),
  *     charLevel:       true  -> no word spaces (Japanese, Chinese, Thai...),
  *     caseFold:        true  -> normalize terms to lower case,
  *     innerApostrophe: true  -> keep apostrophes inside words (l'hiver),
@@ -15,12 +18,25 @@
  *
  * For char-level languages, `tokenize` additionally accepts a SEGMENTATION
  * DICTIONARY (a Set of terms: the learner's own vocabulary, the shared
- * lexicon, ruby bases of this very text). Japanese/Chinese are then segmented
- * into words with greedy longest-match against that dictionary instead of
- * being cut per character. The dictionary grows with the learner's own
- * vocabulary, so segmentation improves as they learn - and the honest label
- * stays the same: this is dictionary matching, not a morphological analyzer.
+ * lexicon, ruby bases of this very text) and combines three layers:
+ *
+ *   1. the browser's own word segmenter (Intl.Segmenter, ICU dictionary)
+ *      when available - real word units (澱粉) instead of single
+ *      characters even for words the learner does not know yet;
+ *   2. greedy longest-match against the dictionary - the learner's own
+ *      words always win, so segmentation improves as they learn;
+ *   3. Japanese inflection merging (shared/flection.mjs): a Kanji head
+ *      plus its okurigana plus a conjugated ending become ONE clickable
+ *      token (眠っている, 食べている, 高くなかった) whenever the dictionary
+ *      confirms the base word.
+ *
+ * Environments without Intl.Segmenter fall back to the previous behaviour
+ * (dictionary match, kana-run grouping, per-character unknowns) plus the
+ * inflection merge. The honest label stays the same: this is dictionary
+ * matching plus auditable grammar tables, not a morphological analyzer.
  */
+
+import { indexByHead, inflectionMatch, HAN_RUN, HIRA_RUN } from './flection.mjs';
 
 export const DEFAULT_TOKENIZER = {
   charLevel: false,
@@ -73,9 +89,14 @@ export function tokenize(text, tokenizer = DEFAULT_TOKENIZER, dictionary = null)
   const t = { ...DEFAULT_TOKENIZER, ...tokenizer };
   const tokens = [];
   if (t.charLevel) {
-    return dictionary && dictionary.size > 0
-      ? segmentWithDictionary(String(text ?? ''), t, dictionary)
-      : charTokens(String(text ?? ''), tokens);
+    if (dictionary && dictionary.size > 0) {
+      const seg = segmenterFor(t.code);
+      if (seg) return segmentWithIcu(seg, text, t, dictionary);
+      return segmentWithDictionary(String(text ?? ''), t, dictionary);
+    }
+    const seg = segmenterFor(t.code);
+    if (seg) return segmentWithIcu(seg, text, t, null);
+    return charTokens(String(text ?? ''), tokens);
   }
   const re = buildWordRegex(t);
   for (const m of text.matchAll(re)) {
@@ -175,7 +196,179 @@ function segmentWithDictionary(text, t, dictionary) {
     pushToken(tokens, text, chars, i, i + 1);
     i += 1;
   }
-  return tokens;
+  return mergeInflectedUnits(tokens, text, flectionIndexFor(dictionary));
+}
+
+// ---------------------------------------------------------------- icu segments
+
+const SEGMENTERS = new Map(); // locale key -> Intl.Segmenter | null
+
+/** Cached Intl.Segmenter for the language code (or the default locale).
+ *  Returns null when the runtime has none (old browsers) or the code is
+ *  not a usable locale tag. */
+function segmenterFor(code) {
+  if (typeof Intl === 'undefined' || typeof Intl.Segmenter !== 'function') return null;
+  const key = typeof code === 'string' && code ? code : '';
+  if (SEGMENTERS.has(key)) return SEGMENTERS.get(key);
+  let seg = null;
+  try {
+    seg = new Intl.Segmenter(key || undefined, { granularity: 'word' });
+  } catch {
+    seg = null; // structurally invalid locale tag - fall back per character
+  }
+  SEGMENTERS.set(key, seg);
+  return seg;
+}
+
+/**
+ * ICU word units of the text as char-index ranges. Code-unit offsets from
+ * the Segmenter are mapped through the char array (surrogate pairs never
+ * split at word boundaries, but a mismatch drops the segment defensively).
+ */
+function icuWordRanges(seg, text, chars) {
+  const charAt = new Map(); // code-unit offset -> char index
+  let off = 0;
+  for (let ci = 0; ci < chars.length; ci += 1) {
+    charAt.set(off, ci);
+    off += chars[ci].length;
+  }
+  const ranges = [];
+  for (const s of seg.segment(text)) {
+    if (!s.isWordLike) continue;
+    const start = charAt.get(s.index);
+    const end = charAt.get(s.index + s.segment.length);
+    if (start == null || end == null || end <= start) continue;
+    if (chars.slice(start, end).join('') !== s.segment) continue;
+    ranges.push({ start, end });
+  }
+  return ranges;
+}
+
+/**
+ * Segmentation with the ICU word segmenter: dictionary terms first (the
+ * learner's own words win), ICU word units for everything else, then the
+ * inflection merge. Without a dictionary the ICU units stand alone -
+ * already a large upgrade over per-character tokens.
+ */
+function segmentWithIcu(seg, text, t, dictionary) {
+  const chars = Array.from(text);
+  const ranges = icuWordRanges(seg, text, chars);
+  const tokens = [];
+  let i = 0;
+  let r = 0; // pointer into ranges (i only moves forward)
+  while (i < chars.length) {
+    const ch = chars[i];
+    if (!WORD_CHAR.test(ch)) {
+      i += 1;
+      continue;
+    }
+    while (r < ranges.length && ranges[r].end <= i) r += 1;
+    if (dictionary && dictionary.size > 0) {
+      let matchLen = 0;
+      const limit = Math.min(chars.length, i + MAX_DICT_WORD);
+      let probe = limit;
+      while (probe > i) {
+        const candidate = chars.slice(i, probe).join('');
+        if (dictionary.has(candidate) || dictionary.has(normalizeTerm(candidate, t))) {
+          matchLen = probe - i;
+          break;
+        }
+        probe -= 1;
+      }
+      if (matchLen > 0) {
+        pushToken(tokens, text, chars, i, i + matchLen);
+        i += matchLen;
+        continue;
+      }
+    }
+    const range = r < ranges.length && i >= ranges[r].start && i < ranges[r].end ? ranges[r] : null;
+    if (range) {
+      const end = Math.max(i + 1, range.end);
+      pushToken(tokens, text, chars, i, end);
+      i = end;
+      continue;
+    }
+    pushToken(tokens, text, chars, i, i + 1);
+    i += 1;
+  }
+  return mergeInflectedUnits(tokens, text, dictionary && dictionary.size > 0 ? flectionIndexFor(dictionary) : null);
+}
+
+// ---------------------------------------------------------------- inflection merge
+
+const INDEX_BY_DICT = new WeakMap(); // dictionary Set -> head index
+
+/** Head index of a dictionary Set, built once per Set (Sets are stable for
+ *  a whole reading session, so per-sentence tokenize calls stay cheap). */
+function flectionIndexFor(dictionary) {
+  if (!dictionary || typeof dictionary.has !== 'function' || typeof dictionary[Symbol.iterator] !== 'function') return null;
+  let index = INDEX_BY_DICT.get(dictionary);
+  if (!index) {
+    index = indexByHead((function* mapPairs() {
+      for (const term of dictionary) yield [term, true];
+    })());
+    INDEX_BY_DICT.set(dictionary, index);
+  }
+  return index;
+}
+
+const PURE_HIRA_RE = /^(?:[ぁ-ゖー])+$/;
+
+/**
+ * Japanese inflection merge, applied to already-segmented tokens: a token
+ * that starts with a Kanji head absorbs the directly following hiragana
+ * tokens when the dictionary knows the base word and the kana is a valid
+ * conjugated ending (眠 + って + いる -> 眠っている). Kana beyond the valid
+ * ending (particles, the next word) stays separate, and nothing merges
+ * without dictionary confirmation - 猫 + は never becomes 猫は. No-op for
+ * languages without Han+kana shapes (Chinese, Thai...).
+ */
+function mergeInflectedUnits(tokens, text, index) {
+  if (!index || index.size === 0 || tokens.length === 0) return tokens;
+  const out = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i];
+    if (!HAN_RUN.test(tok.text)) {
+      out.push(tok);
+      i += 1;
+      continue;
+    }
+    // Absorb the adjacent hiragana run (ICU keeps okurigana separate).
+    let j = i;
+    let runEnd = tok.end;
+    while (
+      j + 1 < tokens.length &&
+      tokens[j + 1].start === runEnd &&
+      PURE_HIRA_RE.test(tokens[j + 1].text) &&
+      runEnd - tok.start <= 16
+    ) {
+      j += 1;
+      runEnd = tokens[j].end;
+    }
+    if (j === i) {
+      out.push(tok);
+      i += 1;
+      continue;
+    }
+    const whole = text.slice(tok.start, runEnd);
+    const match = inflectionMatch(whole, index);
+    if (!match) {
+      // No inflection confirmed: the tokens stand as segmented.
+      for (let k = i; k <= j; k += 1) out.push(tokens[k]);
+      i = j + 1;
+      continue;
+    }
+    const headLen = whole.match(HAN_RUN)[0].length;
+    // Merged word unit; kana beyond the valid ending stays clickable.
+    const mergedText = whole.slice(0, headLen + match.tail.length);
+    const mergedEnd = tok.start + mergedText.length;
+    out.push({ text: mergedText, start: tok.start, end: mergedEnd });
+    const restText = whole.slice(mergedText.length);
+    if (restText) out.push({ text: restText, start: mergedEnd, end: runEnd });
+    i = j + 1;
+  }
+  return out;
 }
 
 function pushToken(tokens, text, chars, from, to) {

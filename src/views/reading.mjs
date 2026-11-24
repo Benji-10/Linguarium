@@ -22,7 +22,7 @@ import { icon, esc, toast, modal, emptyState, provenanceBadge, spinner } from '.
 import { getState, setState, languageName } from '../core/store.mjs';
 import { navigate } from '../core/router.mjs';
 import { api } from '../core/api.mjs';
-import { loadTexts } from '../core/data.mjs';
+import { loadTexts, loadLanguages } from '../core/data.mjs';
 import { LICENSE_OPTIONS, DIFFICULTY_MODES, PROFICIENCY_LEVELS } from '../shared/constants.mjs';
 import { extractFromFile } from '../shared/filetext.mjs';
 
@@ -515,15 +515,24 @@ function renderLibraryTab(panel, modalRef, languageCode) {
   };
 
   // The wiki edition code to read: required for the custom-edition sources
-  // (user-added languages), remembered per panel while it is open.
+  // (user-added languages), remembered per panel while it is open. The
+  // SOURCE EDITION saved in Settings (custom languages) pre-fills it, so the
+  // code is defined once and never re-typed; a newly typed code is saved
+  // back after a successful search (see search()).
   const WIKI_CODE_RE = /^[a-z][a-z0-9-]{1,11}$/;
+  const savedEdition = () => {
+    const lang = (getState().languages ?? []).find((l) => l.code === languageCode);
+    const edition = typeof lang?.source_edition === 'string' ? lang.source_edition.trim().toLowerCase() : '';
+    return WIKI_CODE_RE.test(edition) ? edition : '';
+  };
+  if (savedEdition()) el('l-wiki').value = savedEdition();
   const wikiCode = () => {
     const provider = el('l-provider').value;
-    const code = el('l-wiki').value.trim().toLowerCase();
+    const code = el('l-wiki').value.trim().toLowerCase() || savedEdition();
     if (!provider.endsWith('-custom')) return null;
     if (!code || !WIKI_CODE_RE.test(code)) {
       el('l-wiki').focus();
-      toast('Type a wiki language code first - e.g. "mi" (Maori), "scn" (Sicilian), "simple" (Simple English).', 'warn');
+      toast('Type a wiki language code first - e.g. "mi" (Maori), "scn" (Sicilian), "simple" (Simple English). You can also set it once in Settings (Library edition).', 'warn');
       return undefined;
     }
     return code;
@@ -532,8 +541,17 @@ function renderLibraryTab(panel, modalRef, languageCode) {
   const search = async (page = 1) => {
     const provider = el('l-provider').value;
     if (!provider) return;
+    const typed = el('l-wiki').value.trim().toLowerCase();
     const wiki = wikiCode();
     if (wiki === undefined) return;
+    // A newly typed code becomes the language's saved source edition (the
+    // "define once" promise): languages you own accept the update silently,
+    // built-in languages simply keep their per-panel behaviour.
+    if (wiki && wiki !== savedEdition() && typed === wiki) {
+      api('/api/languages', { method: 'PUT', body: { code: languageCode, source_edition: wiki } })
+        .then(() => loadLanguages())
+        .catch(() => {});
+    }
     const q = el('l-query').value.trim();
     currentPage = page;
     results.innerHTML = `${spinner(page > 1 ? 'Loading page ' + page : 'Searching')}`;
@@ -626,9 +644,11 @@ function renderLibraryTab(panel, modalRef, languageCode) {
     }
     // Opening the tab browses the language shelf immediately (the fast route
     // per provider); failures above render a retry instead of raw errors.
-    if (needsCode.has(select.value)) {
+    // With a saved Library edition the custom-edition sources browse it
+    // straight away - the "type a code" prompt only appears without one.
+    if (needsCode.has(select.value) && !savedEdition()) {
       results.innerHTML =
-        '<p class="muted small">This source reads any wiki edition by its language code - type one (e.g. "mi" for Maori, "simple" for Simple English) and press Search.</p>';
+        '<p class="muted small">This source reads any wiki edition by its language code - type one (e.g. "mi" for Maori, "simple" for Simple English) and press Search, or set a Library edition once in Settings.</p>';
       return;
     }
     search(1);

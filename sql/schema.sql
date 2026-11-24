@@ -39,6 +39,13 @@ CREATE TABLE IF NOT EXISTS knowledge.languages (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Source edition for custom languages (2026-11): the wiki language code
+-- the open library should read for a language whose own code is not a wiki
+-- edition ("srs" -> reads "simple"). Defined once in Settings, used by the
+-- catalog, the import endpoint and the library tab. Nullable: unset means
+-- the custom-edition providers ask for a code per search, as before.
+ALTER TABLE knowledge.languages ADD COLUMN IF NOT EXISTS source_edition TEXT;
+
 CREATE TABLE IF NOT EXISTS knowledge.grammar_structures (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   language_code TEXT NOT NULL,

@@ -21,6 +21,7 @@ import { api } from '../core/api.mjs';
 import { navigate } from '../core/router.mjs';
 import { tokenize, normalizeTerm } from '../shared/tokenizer.mjs';
 import { parseRuby, readingMapFor } from '../shared/ruby.mjs';
+import { conjugatedReading, surfaceReadingFromDict, inflectionMatch, indexByHead } from '../shared/flection.mjs';
 import { paginate } from '../shared/parsers.mjs';
 import { segmentDictionaryFor } from '../core/data.mjs';
 import { scoreText } from '../shared/difficulty.mjs';
@@ -77,13 +78,25 @@ export async function renderReader(container, params) {
   );
   for (const [term, reading] of segDict.readings ?? []) vocabReadings.set(term, reading);
 
-  // Knowledge classification for highlighting.
+  // Knowledge classification for highlighting. Inflected Japanese forms
+  // (眠っている) count as known/learning when the dictionary form (眠る) is:
+  // the inflection matcher (shared/flection.mjs) resolves the surface back
+  // to its base word using auditable grammar tables.
   const entriesByNorm = new Map();
   for (const e of state.entries.filter((e) => e.language_code === language)) {
     entriesByNorm.set(e.normalized, e);
   }
-  const classify = (norm) => {
-    const entry = entriesByNorm.get(norm);
+  const entriesByHead = indexByHead(
+    state.entries
+      .filter((e) => e.language_code === language)
+      .flatMap((e) => [[e.term, e], ...(e.normalized && e.normalized !== e.term ? [[e.normalized, e]] : [])]),
+  );
+  const classify = (norm, raw) => {
+    let entry = entriesByNorm.get(norm);
+    if (!entry && raw) {
+      const m = inflectionMatch(raw, entriesByHead);
+      if (m) entry = m.value;
+    }
     if (!entry) return 'unknown';
     const { tier } = deriveStatus(entry, entry.memories ?? {});
     if (tier === 'mastered' || tier === 'reliably_recalled') return 'known';
@@ -204,15 +217,27 @@ export async function renderReader(container, params) {
   // dictionary lookups and AI analyses carry readings, so a word looked up
   // once gets furigana immediately (that is what makes the furigana toggle
   // visibly do something on texts that carry no inline annotations).
+  // Readings are stored under the DICTIONARY term (jisho returns 眠る for a
+  // clicked 眠っている), and the render pass derives the inflected surface
+  // reading from them - the old behaviour stamped ねむる over 眠っている.
   const effectiveReadings = () => {
     const merged = new Map(vocabReadings);
     for (const [norm, enr] of enrichments) {
       const reading = enr?.payload?.reading;
-      if (reading) merged.set(norm, String(reading));
+      if (typeof reading !== 'string' || !reading) continue;
+      const derived = surfaceReadingFromDict(norm, reading);
+      merged.set(norm, derived ?? reading);
     }
     for (const [norm, lk] of lookups) {
-      const reading = (lk?.entries ?? []).find((e) => e?.reading)?.reading;
-      if (reading) merged.set(norm, String(reading));
+      for (const e of lk?.entries ?? []) {
+        if (typeof e?.reading !== 'string' || !e.reading) continue;
+        // Readings attach to the ENTRY's own headword when it has one
+        // (jisho returns 眠る for a clicked 眠っている); Wiktionary entries
+        // carry no term field - they were fetched FOR the looked-up word, so
+        // that word is the headword.
+        const key = typeof e?.term === 'string' && e.term ? normalizeTerm(e.term, tokenizer) : norm;
+        merged.set(key, e.reading);
+      }
     }
     return merged;
   };
@@ -482,7 +507,13 @@ export async function renderReader(container, params) {
 
   const openPanel = async (termRaw) => {
     const norm = normalizeTerm(termRaw, tokenizer);
-    const entry = entriesByNorm.get(norm);
+    let entry = entriesByNorm.get(norm);
+    // Inflected surface (眠っている): the panel reflects the base word's
+    // (眠る) status, so knowledge highlighting and the panel agree.
+    if (!entry) {
+      const m = inflectionMatch(termRaw, entriesByHead);
+      if (m) entry = m.value;
+    }
     sessionEncounters.set(norm, { raw: termRaw, entryId: entry?.id ?? null });
     panel.hidden = false;
     panel.classList.add('open');
@@ -1010,10 +1041,14 @@ function renderTokens(
       // analysis cached this session) already carries. Only tokens that
       // CONTAIN Kanji/Han get furigana or pinyin - annotating a pure-kana
       // word with its own reading is noise ("ここ（ここ）" helps nobody).
+      // Inflected forms derive their reading from the dictionary form's
+      // reading: 眠っている + 眠る(ねむる) -> ねむっている.
       const norm = normalizeTerm(tok.text, tokenizer);
       const reading =
         showRuby && vocabReadings && HAN_SCRIPT_RE.test(tok.text)
-          ? vocabReadings.get(norm) ?? vocabReadings.get(tok.text)
+          ? vocabReadings.get(norm) ??
+            vocabReadings.get(tok.text) ??
+            conjugatedReading(tok.text, (term) => vocabReadings.get(term) ?? vocabReadings.get(normalizeTerm(term, tokenizer)))
           : null;
       if (reading) {
         const ruby = document.createElement('ruby');
@@ -1044,7 +1079,7 @@ function fmtLen2(chars) {
 
 function tokenSpan(tok, tokenizer, classify) {
   const span = document.createElement('span');
-  span.className = `tok ${classify(normalizeTerm(tok.text, tokenizer))}`;
+  span.className = `tok ${classify(normalizeTerm(tok.text, tokenizer), tok.text)}`;
   span.dataset.raw = tok.text;
   span.textContent = tok.text;
   return span;

@@ -103,3 +103,41 @@ test('readingMapFor maps terms to readings with NFC keys', () => {
   assert.equal(map.get('食べる'), 'たべる');
   assert.equal(map.size, 1);
 });
+
+// ---------------------------------------------------------------
+// Dictionary-form annotations (2026-11 fix): a verb annotated with its
+// dictionary-form reading before an inflected ending must be adjusted to
+// the stem so the okurigana is not pronounced twice.
+// ---------------------------------------------------------------
+
+test('dictionary-form annotation is adjusted to the stem (the reported bug)', () => {
+  // 眠（ねむる）っている must NOT render as ねむる + っている = "ねむるっている".
+  const { clean, marks } = parseRuby('猫が眠（ねむる）っている。');
+  assert.equal(clean, '猫が眠っている。');
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0].base, '眠');
+  assert.equal(marks[0].reading, 'ねむ');
+});
+
+test('stem-style annotations pass through unchanged', () => {
+  // 抜（ぬ）かした: the reading ぬ is already the stem - かした is not a
+  // valid conjugation of a ぬ-ending verb, so nothing is stripped.
+  const { marks } = parseRuby('腰を抜（ぬ）かした。');
+  assert.equal(marks[0].reading, 'ぬ');
+  // 名詞（めいし）が: が is a particle, not an inflection.
+  const noun = parseRuby('名詞（めいし）が並ぶ。');
+  assert.equal(noun.marks[0].reading, 'めいし');
+});
+
+test('adjective and suru-verb dictionary-form annotations adjust too', () => {
+  const adj = parseRuby('暑（あつい）かった夏。');
+  assert.equal(adj.marks[0].reading, 'あつ');
+  const suru = parseRuby('勉強（べんきょうする）していた。');
+  assert.equal(suru.marks[0].reading, 'べんきょう');
+});
+
+test('adjusted mark offsets still point at the base in the cleaned text', () => {
+  const { clean, marks } = parseRuby('雨が降（ふ）っていた。');
+  assert.equal(clean, '雨が降っていた。');
+  assert.equal(clean.slice(marks[0].baseStart, marks[0].baseEnd), '降');
+});

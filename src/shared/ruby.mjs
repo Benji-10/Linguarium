@@ -19,8 +19,19 @@
  * when the parenthetical content actually looks like a reading of the Han run
  * that immediately precedes it.
  *
+ * DICTIONARY-FORM ANNOTATIONS (2026-11 fix): some texts annotate the
+ * dictionary form of a verb while the sentence carries an inflected
+ * ending - 眠（ねむる）っている. Rendering ねむる above 眠 and leaving
+ * っている as plain text made the reader pronounce "ねむるっている".
+ * The reading is therefore adjusted to the stem (ねむ) whenever the text
+ * that follows opens with a valid conjugated ending of the reading's final
+ * kana (shared/flection.mjs); stem-style annotations (抜（ぬ）かした) are
+ * left untouched because their following text is not a valid inflection.
+ *
  * Pure functions, browser/Node safe.
  */
+
+import { adjustAnnotationReading } from './flection.mjs';
 
 const HAN = '\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF';
 const KANA = '\\u3041-\\u3096\\u30A1-\\u30FA\\u30FC\\u30FD\\u3005\\u3006\\uFF67-\\uFF9F';
@@ -123,6 +134,16 @@ export function parseRuby(text) {
     const covered = coveredRunLength(kind, paren, hanCount);
     const base = covered < hanCount ? hanRun.slice(hanRun.length - covered) : hanRun;
 
+    let reading = paren.replace(/\s+/g, ' ').trim();
+    // Dictionary-form furigana before an inflected ending: 眠（ねむる）って
+    // keeps only the stem (ねむ) so the okurigana that follows is not
+    // pronounced twice ("ねむるって" -> ねむっている). Pinyin and stem-style
+    // readings are returned unchanged by the adjuster.
+    if (kind === 'furigana') {
+      const adjusted = adjustAnnotationReading(reading, source.slice(m.index + full.length));
+      if (adjusted) reading = adjusted;
+    }
+
     // Copy everything before the annotation, minus the parenthetical part.
     const annotationStart = m.index + hanRun.length;
     clean += source.slice(cursor, annotationStart);
@@ -131,7 +152,7 @@ export function parseRuby(text) {
       baseStart,
       baseEnd: baseStart + base.length,
       base,
-      reading: paren.replace(/\s+/g, ' ').trim(),
+      reading,
       kind,
     });
     cursor = m.index + full.length;

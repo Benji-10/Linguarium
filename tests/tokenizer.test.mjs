@@ -1,6 +1,11 @@
 /**
  * Tokenizer tests: word-level and character-level tokenization, normalization,
  * language-specific inner characters (apostrophes, hyphens), RTL is orthogonal.
+ *
+ * Char-level languages get three layers (see the module header): ICU word
+ * units via Intl.Segmenter, greedy dictionary matching, and the Japanese
+ * inflection merge. The no-ICU fallback path is tested by stubbing
+ * Intl.Segmenter out.
  */
 
 import test from 'node:test';
@@ -10,7 +15,8 @@ import { tokenize, normalizeTerm, distinctTerms, splitSentences, buildWordRegex 
 const EN = { charLevel: false, caseFold: true, innerApostrophe: true, innerHyphen: true };
 const FR = { charLevel: false, caseFold: true, innerApostrophe: true, innerHyphen: false };
 const TOK = { charLevel: false, caseFold: true, innerApostrophe: false, innerHyphen: false };
-const JA = { charLevel: true, caseFold: false };
+const JA = { charLevel: true, caseFold: false, code: 'ja' };
+const HAS_ICU = typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function';
 
 test('english word tokenization with punctuation', () => {
   const toks = tokenize('The North Wind and the Sun were disputing!', EN);
@@ -50,12 +56,20 @@ test('toki pona tokenizes as plain lowercase words', () => {
   );
 });
 
-test('character-level tokenization for Japanese-like languages', () => {
+test('character-level tokenization without a dictionary uses ICU word units', () => {
   const toks = tokenize('私はここにいます。', JA);
-  assert.deepEqual(
-    toks.map((t) => t.text),
-    ['私', 'は', 'こ', 'こ', 'に', 'い', 'ま', 'す'],
-  );
+  if (HAS_ICU) {
+    // ICU knows ここ and ます as words - no per-character cutting anymore.
+    assert.deepEqual(
+      toks.map((t) => t.text),
+      ['私', 'は', 'ここ', 'に', 'い', 'ます'],
+    );
+  } else {
+    assert.deepEqual(
+      toks.map((t) => t.text),
+      ['私', 'は', 'こ', 'こ', 'に', 'い', 'ま', 'す'],
+    );
+  }
 });
 
 // ---------------------------------------------------------------
@@ -89,21 +103,25 @@ test('dictionary segmentation offsets stay contiguous and correct', () => {
   assert.equal(covered, '名前はまだ無い');
 });
 
-test('unknown kanji stay single tokens; kana stretches group calmly', () => {
-  // 獰悪 are unknown kanji (single tokens each). In あれは何ですか the stretch
-  // あれ ends at the dictionary word は, 何 is a dictionary word, and ですか
-  // (no dictionary term inside it) groups into one calm token.
+test('unknown kanji stay clickable without a dictionary hit', () => {
+  // 獰悪 has no dictionary entry: ICU still yields it as one word unit
+  // (douaku - it is a real word), and the rest comes out as word units too
+  // (あれ, は, 何, です, か). The no-ICU fallback keeps single characters.
   const dict = new Set(['は', '何']);
   const toks = tokenize('獰悪あれは何ですか。', JA, dict);
   assert.deepEqual(
     toks.map((t) => t.text),
-    ['獰', '悪', 'あれ', 'は', '何', 'ですか'],
+    HAS_ICU ? ['獰悪', 'あれ', 'は', '何', 'です', 'か'] : ['獰', '悪', 'あれ', 'は', '何', 'ですか'],
   );
 });
 
-test('empty dictionary falls back to per-character tokenization', () => {
+test('empty dictionary falls back to ICU word units (better than characters)', () => {
   const toks = tokenize('私はここにいます。', JA, new Set());
-  assert.deepEqual(toks.map((t) => t.text), ['私', 'は', 'こ', 'こ', 'に', 'い', 'ま', 'す']);
+  if (HAS_ICU) {
+    assert.deepEqual(toks.map((t) => t.text), ['私', 'は', 'ここ', 'に', 'い', 'ます']);
+  } else {
+    assert.deepEqual(toks.map((t) => t.text), ['私', 'は', 'こ', 'こ', 'に', 'い', 'ま', 'す']);
+  }
 });
 
 test('chinese segmentation with pinyin vocabulary works the same way', () => {
@@ -158,4 +176,89 @@ test('tokenizer is script-agnostic: arabic and devanagari letters work', () => {
 test('buildWordRegex returns null for character-level configs', () => {
   assert.equal(buildWordRegex({ charLevel: true }), null);
   assert.ok(buildWordRegex(EN) instanceof RegExp);
+});
+
+// ---------------------------------------------------------------
+// The reported reader bugs (2026-11 feedback round):
+//   - 澱粉 split into per-character clicks (only single-char lookups)
+//   - 眠っている split so furigana could not be conjugation-aware
+// ---------------------------------------------------------------
+
+test('dictionary-known words are whole units even when ICU would split them (澱粉)', () => {
+  const dict = new Set(['澱粉', 'は', '白色']);
+  const toks = tokenize('澱粉は白色である。', JA, dict).filter((t) => /\p{L}/u.test(t.text));
+  assert.deepEqual(toks.map((t) => t.text), ['澱粉', 'は', '白色', 'で', 'ある']);
+});
+
+test('ICU word units cover unknown multi-kanji words (one click, not per character)', () => {
+  if (!HAS_ICU) return;
+  const dict = new Set(['は']);
+  const toks = tokenize('澱粉は米から作られる。', JA, dict).filter((t) => /\p{L}/u.test(t.text));
+  assert.ok(toks.some((t) => t.text === '澱粉'), `expected 澱粉 as one unit in ${JSON.stringify(toks.map((t) => t.text))}`);
+});
+
+test('inflected verbs become ONE clickable token (眠っている)', () => {
+  const dict = new Set(['眠る', '間', 'に', '雨', 'が', '降る']);
+  const toks = tokenize('眠っている間に雨が降った。', JA, dict).filter((t) => /\p{L}/u.test(t.text));
+  assert.deepEqual(
+    toks.map((t) => t.text),
+    ['眠っている', '間', 'に', '雨', 'が', '降った'],
+  );
+});
+
+test('ichidan verbs with okurigana merge (食べている)', () => {
+  const dict = new Set(['食べる', '猫', '魚', 'を']);
+  const toks = tokenize('猫は魚を食べている。', JA, dict).filter((t) => /\p{L}/u.test(t.text));
+  assert.deepEqual(
+    toks.map((t) => t.text),
+    ['猫', 'は', '魚', 'を', '食べている'],
+  );
+});
+
+test('i-adjectives merge their inflections (高くなかった)', () => {
+  const dict = new Set(['高い']);
+  const toks = tokenize('高くなかった。', JA, dict).filter((t) => /\p{L}/u.test(t.text));
+  assert.deepEqual(toks.map((t) => t.text), ['高くなかった']);
+});
+
+test('particles never merge into the word (猫は stays 猫 + は)', () => {
+  const dict = new Set(['猫', 'は']);
+  const toks = tokenize('猫は魚を食べる。', JA, dict).filter((t) => /\p{L}/u.test(t.text));
+  assert.deepEqual(
+    toks.map((t) => t.text),
+    ['猫', 'は', '魚', 'を', '食べる'],
+  );
+});
+
+test('merge offsets stay exact for the renderer', () => {
+  const text = '眠っている間に雨が降った。';
+  const dict = new Set(['眠る', '間', 'に', '雨', 'が', '降る']);
+  for (const t of tokenize(text, JA, dict)) {
+    if (/\p{L}/u.test(t.text)) assert.equal(text.slice(t.start, t.end), t.text);
+  }
+});
+
+test('merged tokens cover the text contiguously', () => {
+  const text = '猫が眠っていた。';
+  const dict = new Set(['眠る', '猫', 'が']);
+  const toks = tokenize(text, JA, dict).filter((t) => /\p{L}/u.test(t.text));
+  assert.equal(toks.map((t) => t.text).join(''), '猫が眠っていた');
+});
+
+test('the no-ICU fallback still merges inflections (kana-run path)', () => {
+  const realSegmenter = Intl.Segmenter;
+  try {
+    Intl.Segmenter = undefined; // old runtime simulation
+    const dict = new Set(['眠る', '猫', 'が']);
+    const toks = tokenize('猫が眠っている。', JA, dict).filter((t) => /\p{L}/u.test(t.text));
+    assert.deepEqual(
+      toks.map((t) => t.text),
+      ['猫', 'が', '眠っている'],
+    );
+    // And the per-character behaviour survives for unknown stretches.
+    const bare = tokenize('私はここにいます。', JA, new Set(['私', 'は', 'に']));
+    assert.deepEqual(bare.map((t) => t.text), ['私', 'は', 'ここ', 'に', 'います']);
+  } finally {
+    Intl.Segmenter = realSegmenter;
+  }
 });

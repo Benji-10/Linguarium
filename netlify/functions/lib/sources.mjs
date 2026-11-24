@@ -661,7 +661,10 @@ export function mapJisho(json, term) {
 
 // ---------------------------------------------------------------- gutendex
 
-/** Map a Gutendex search response to catalog items. */
+/** Map a Gutendex search response to catalog items. Gutendex carries no
+ *  blurbs, so the book's own shelves/subjects become the one-line hint -
+ *  honest catalogue metadata ("Adventure · Sea stories"), never invented
+ *  summary. Without any subjects the card stays without a blurb. */
 export function mapGutendex(json) {
   const books = Array.isArray(json?.results) ? json.results : [];
   return books.slice(0, 24).map((b) => ({
@@ -672,8 +675,32 @@ export function mapGutendex(json) {
     language: (b.languages ?? [])[0] ?? 'en',
     source_url: `https://www.gutenberg.org/ebooks/${b.id}`,
     license: 'public-domain',
-    description: null,
+    description: gutendexBlurb(b),
   }));
+}
+
+/** "Adventure · Sea stories · Whaling" from the book's shelves + subjects. */
+function gutendexBlurb(book) {
+  const tags = [];
+  const seen = new Set();
+  const push = (raw) => {
+    const t = String(raw ?? '')
+      .replace(/\s*--\s*/g, ' - ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/[.;]$/, '');
+    const key = t.toLowerCase();
+    if (t && t.length <= 48 && !seen.has(key)) {
+      seen.add(key);
+      tags.push(t);
+    }
+  };
+  for (const shelf of (book?.bookshelves ?? []).slice(0, 2)) push(shelf);
+  for (const subject of book?.subjects ?? []) {
+    if (tags.length >= 3) break;
+    push(subject);
+  }
+  return tags.length ? tags.slice(0, 3).join(' · ').slice(0, 160) : null;
 }
 
 /** Page info from a Gutendex response: { count, next, previous } . */
@@ -915,31 +942,40 @@ export function parseRss(xml) {
 /**
  * Curated news feeds: only stable, well-known, keyless feeds, every one
  * live-verified from a datacenter IP (2026-11). France 24's RSS now refuses
- * datacenter traffic (403), so French is served by Le Monde instead; the
- * list favors broadcasters that welcome syndication (BBC World Service
- * languages, Deutsche Welle, Al Jazeera, ANSA) plus the Korean daily
- * 한겨레 (Hankyoreh), which keeps a clean open RSS. Each row names its
- * license situation honestly - the article page is the authority.
+ * datacenter traffic (403), so French is served by Le Monde and 20 Minutes;
+ * Russian by the BBC/DW services plus N+1 (popular science) and Meduza;
+ * Chinese by BBC 中文 and Deutsche Welle; Spanish gains El País; Japanese
+ * gains NHK News Web. Korean major outlets (Yonhap, Chosun, SBS, Khan,
+ * News1) were all probed and refuse datacenter RSS (403/404) - Korean
+ * keeps the 한겨레 (Hankyoreh) feed, the one daily with an open RSS. Each
+ * row names its license situation honestly - the article page is the
+ * authority.
  */
 export const NEWS_FEEDS = [
   { language: 'en', name: 'BBC News (World)', url: 'https://feeds.bbci.co.uk/news/world/rss.xml' },
   { language: 'en', name: 'Al Jazeera (English)', url: 'https://www.aljazeera.com/xml/rss/all.xml' },
   { language: 'en', name: 'Deutsche Welle (English)', url: 'https://rss.dw.com/xml/rss-en-all' },
   { language: 'fr', name: 'Le Monde (à la une)', url: 'https://www.lemonde.fr/rss/une.xml' },
+  { language: 'fr', name: '20 Minutes (à la une)', url: 'https://www.20minutes.fr/feeds/rss-une.xml' },
   { language: 'de', name: 'Deutsche Welle (Deutsch)', url: 'https://rss.dw.com/xml/rss-de-all' },
   { language: 'es', name: 'BBC Mundo', url: 'https://feeds.bbci.co.uk/mundo/rss.xml' },
   { language: 'es', name: 'Deutsche Welle (Español)', url: 'https://rss.dw.com/xml/rss-es-all' },
+  { language: 'es', name: 'El País (portada)', url: 'https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada' },
   { language: 'pt', name: 'BBC Brasil', url: 'https://feeds.bbci.co.uk/portuguese/rss.xml' },
   { language: 'it', name: 'ANSA (Italia)', url: 'https://www.ansa.it/sito/ansait_rss.xml' },
   { language: 'ru', name: 'BBC News (Русская служба)', url: 'https://feeds.bbci.co.uk/russian/rss.xml' },
   { language: 'ru', name: 'Deutsche Welle (Русский)', url: 'https://rss.dw.com/xml/rss-ru-all' },
+  { language: 'ru', name: 'N+1 (наука)', url: 'https://nplus1.ru/rss' },
+  { language: 'ru', name: 'Meduza', url: 'https://meduza.io/rss/all' },
   { language: 'uk', name: 'BBC News (Ukrainian)', url: 'https://feeds.bbci.co.uk/ukrainian/rss.xml' },
   { language: 'ar', name: 'Al Jazeera (العربية)', url: 'https://www.aljazeera.net/aljazeerarss/a7c186be-1baa-4bd4-9d80-a84db769f779/73d0e1b4-532f-45ef-b1f3-1f2c90c5cc61' },
   { language: 'ar', name: 'Deutsche Welle (عربي)', url: 'https://rss.dw.com/rdf/rss-ar-all' },
   { language: 'fa', name: 'BBC News (Persian)', url: 'https://feeds.bbci.co.uk/persian/rss.xml' },
   { language: 'hi', name: 'BBC News (हिन्दी)', url: 'https://feeds.bbci.co.uk/hindi/rss.xml' },
   { language: 'zh', name: 'BBC 中文 (简体)', url: 'https://feeds.bbci.co.uk/zhongwen/simp/rss.xml' },
+  { language: 'zh', name: 'Deutsche Welle (中文)', url: 'https://rss.dw.com/xml/rss-chi-all' },
   { language: 'ja', name: 'BBC News Japan', url: 'https://feeds.bbci.co.uk/japanese/rss.xml' },
+  { language: 'ja', name: 'NHK News Web (主要ニュース)', url: 'https://www3.nhk.or.jp/rss/news/cat0.xml' },
   { language: 'ko', name: '한겨레 (Hankyoreh)', url: 'https://www.hani.co.kr/rss/' },
   { language: 'tr', name: 'BBC News (Türkçe)', url: 'https://feeds.bbci.co.uk/turkce/rss.xml' },
 ];
@@ -985,6 +1021,17 @@ export const WIKIBOOKS_LANGUAGES = [
   'sk', 'hu', 'ro', 'bg', 'ru', 'uk', 'el', 'la', 'eo', 'tr', 'sq', 'lt', 'lv', 'et', 'cy',
   'ga', 'af', 'id', 'ms', 'tl', 'vi', 'ar', 'he', 'fa', 'ur', 'ps', 'hi', 'bn', 'ta', 'te',
   'kn', 'ml', 'th', 'zh', 'ja', 'ko',
+];
+
+/** Languages with a Wikivoyage edition (per the wikivoyage.org portal,
+ *  2026-11). Travel guides are ideal learner reading - concrete vocabulary,
+ *  short sections, everyday register - and they ride the same wiki
+ *  infrastructure (allpages shelf, search, CC BY-SA). Notably ABSENT:
+ *  Korean - there is no ko.wikivoyage.org (the portal lists no Korean
+ *  edition), and Norwegian: no no.wikivoyage.org either. */
+export const WIKIVOYAGE_LANGUAGES = [
+  'en', 'de', 'it', 'fa', 'fr', 'nl', 'pl', 'pt', 'ru', 'es', 'sv', 'el', 'vi', 'uk', 'he',
+  'ro', 'fi', 'zh', 'bn', 'ps', 'shn', 'tr', 'cs', 'hi', 'eo', 'id', 'ja',
 ];
 
 /** Languages with a Wikipedia edition - every app language, including Toki
@@ -1241,11 +1288,17 @@ export const PROVIDERS = {
     languages: WIKINEWS_LANGUAGES,
     priority: 5,
   },
+  wikivoyage: {
+    label: 'Wikivoyage',
+    blurb: 'Travel guides - concrete everyday vocabulary in short sections (CC BY-SA; attribution to the contributors).',
+    languages: WIKIVOYAGE_LANGUAGES,
+    priority: 6,
+  },
   news: {
     label: 'News feeds',
-    blurb: 'Curated stable RSS feeds (BBC World Service languages, Deutsche Welle, Al Jazeera, ANSA, Le Monde, Hankyoreh). Article pages are the licensing authority.',
+    blurb: 'Curated stable RSS feeds (BBC World Service languages, Deutsche Welle, Al Jazeera, ANSA, Le Monde, 20 Minutes, El País, N+1, Meduza, NHK, Hankyoreh). Article pages are the licensing authority.',
     languages: [...new Set(NEWS_FEEDS.map((f) => f.language))],
-    priority: 6,
+    priority: 7,
   },
   // The custom-edition bridge: a user-added language (Maori, Sicilian, a
   // conlang...) reads any wiki whose code the user types - mi.wikipedia.org,
@@ -1303,6 +1356,11 @@ export async function wikiEditionExists(code, project) {
  * Tiny TTL memo cache for the catalog: Netlify function instances are reused
  * across requests, so a hot language shelf answers instantly instead of
  * hammering rate-limited upstreams (Gutendex throttles bursts; probed 2026-11).
+ *
+ * Expired entries are KEPT (up to the size cap): memoJsonStale() serves them
+ * when a refresh fails, so a slow Gutendex page degrades to slightly old
+ * results instead of an error - the user saw exactly that as "page 2 always
+ * times out, a refresh sometimes fixes it" (2026-11).
  */
 const MEMO = new Map();
 export async function memoJson(key, ttlMs, fetcher) {
@@ -1316,4 +1374,11 @@ export async function memoJson(key, ttlMs, fetcher) {
     }
   }
   return value;
+}
+
+/** Last successfully fetched value for a key, even if its TTL expired
+ *  (stale-while-error fallback). Null when the key was never fetched. */
+export function memoJsonStale(key) {
+  const hit = MEMO.get(key);
+  return hit ? hit.value : null;
 }

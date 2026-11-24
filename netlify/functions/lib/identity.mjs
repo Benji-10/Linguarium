@@ -31,10 +31,10 @@ export async function ensureUserRow(user) {
   return rows[0]?.display_name ?? name;
 }
 
-/** Fetch the tokenizer config and direction for a language code. */
+/** Fetch the tokenizer config, direction and source edition for a code. */
 export async function languageFor(code) {
   const rows = await sql()`
-    SELECT code, name, direction, tokenizer FROM knowledge.languages
+    SELECT code, name, direction, tokenizer, source_edition FROM knowledge.languages
     WHERE code = ${code}`;
   return rows[0] ?? null;
 }

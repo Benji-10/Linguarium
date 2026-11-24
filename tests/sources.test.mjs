@@ -39,6 +39,11 @@ import {
   aozoraHtmlToText,
   aozoraUrls,
   unzipFirstEntry,
+  memoJson,
+  memoJsonStale,
+  NEWS_FEEDS,
+  PROVIDERS,
+  WIKIVOYAGE_LANGUAGES,
 } from '../netlify/functions/lib/sources.mjs';
 
 test('ssrf guard blocks private and odd targets', () => {
@@ -465,4 +470,69 @@ test('unzipFirstEntry inflates a single-file deflate zip', () => {
   const out = unzipFirstEntry(zip);
   assert.equal(out.toString('utf8'), content.toString('utf8'));
   assert.throws(() => unzipFirstEntry(Buffer.from('not a zip at all')), /not a zip/);
+});
+
+// ---------------------------------------------------------------
+// 2026-11 feedback round: Gutenberg card blurbs, stale memo fallback,
+// source coverage for ko/zh/ru/fr/es, Wikivoyage provider.
+// ---------------------------------------------------------------
+
+test('mapGutendex fills the card blurb from shelves and subjects (honest metadata)', () => {
+  const items = mapGutendex({
+    results: [
+      {
+        id: 2701,
+        title: 'Moby Dick; Or, The Whale',
+        authors: [{ name: 'Melville, Herman' }],
+        languages: ['en'],
+        bookshelves: ['Adventure'],
+        subjects: ['Sea stories', 'Whaling -- Fiction', 'A very long subject heading that should be skipped because it exceeds the length cap and clutters the card'],
+      },
+      { id: 1342, title: 'Pride and Prejudice', authors: [], languages: ['en'] },
+    ],
+  });
+  assert.equal(items[0].description, 'Adventure · Sea stories · Whaling - Fiction');
+  assert.equal(items[0].author, 'Melville, Herman');
+  assert.equal(items[1].description, null); // no subjects -> no invented blurb
+  assert.equal(items[1].author, null);
+});
+
+test('memoJson serves the last successful value after TTL expiry (stale-while-error)', async () => {
+  const key = `test:stale:${Math.random()}`;
+  const first = await memoJson(key, 1, async () => ({ page: 1 }));
+  assert.deepEqual(first, { page: 1 });
+  assert.equal(memoJsonStale(key), first); // fresh now
+  await new Promise((r) => setTimeout(r, 5)); // TTL lapses
+  let fetched = false;
+  await assert.rejects(() => memoJson(key, 1, async () => {
+    fetched = true;
+    throw new Error('gutendex rate limit');
+  }));
+  assert.equal(fetched, true);
+  assert.deepEqual(memoJsonStale(key), { page: 1 }); // stale survives the failure
+  assert.equal(memoJsonStale('never-fetched-key'), null);
+});
+
+test('news feeds cover the feedback-round languages and stay deduplicated', () => {
+  for (const lang of ['fr', 'es', 'ru', 'zh', 'ja']) {
+    assert.ok(NEWS_FEEDS.some((f) => f.language === lang), `${lang} has a feed`);
+    assert.ok(NEWS_FEEDS.filter((f) => f.language === lang).length >= 2, `${lang} has 2+ feeds`);
+  }
+  const urls = NEWS_FEEDS.map((f) => f.url);
+  assert.equal(new Set(urls).size, urls.length); // no duplicate feeds
+});
+
+test('Wikivoyage is a registered provider serving the feedback-round languages (except Korean)', () => {
+  assert.ok(PROVIDERS.wikivoyage, 'provider exists');
+  for (const lang of ['zh', 'ru', 'fr', 'es']) {
+    assert.ok(WIKIVOYAGE_LANGUAGES.includes(lang), `${lang} has a Wikivoyage edition`);
+    assert.ok(providersForLanguage(lang).some((p) => p.id === 'wikivoyage'), `${lang} gets Wikivoyage in its source list`);
+  }
+  // Korean has no Wikivoyage edition - the portal lists none (2026-11).
+  assert.ok(!WIKIVOYAGE_LANGUAGES.includes('ko'));
+});
+
+test('mw hosts resolve for wikivoyage editions (the generic wiki family route)', () => {
+  assert.equal(MW_HOST('wikivoyage', 'fr'), 'fr.wikivoyage.org');
+  assert.equal(MW_HOST('wikivoyage', 'zh'), 'zh.wikivoyage.org');
 });

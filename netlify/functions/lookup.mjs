@@ -6,13 +6,18 @@
  *   3. ONLINE DICTIONARIES, in order:
  *      - Japanese: jisho.org (JMdict/EDRDG, CC BY-SA) - the canonical
  *        learner dictionary, with readings, and it de-inflects the word
- *        itself (clicking 食べました finds 食べる)
+ *        itself (clicking 食べました finds 食べる). This route runs for
+ *        EVERY Japanese term - there are no per-word special cases anywhere
+ *        in this chain.
  *      - Wiktionary for every language, three routes in order: the REST
  *        definitions endpoint, then the action=parse page route, then the
  *        api.wikimedia.org gateway (raw wikitext, parsed by the wikitext
  *        mapper). The direct routes 403 datacenter traffic while the
- *        gateway routinely passes - that trio is what fixed the
- *        "dictionary finds nothing" bug for words like neck/sibling/首
+ *        gateway routinely passes - that trio is what fixed a 2026-11 bug
+ *        where the chain returned nothing for perfectly ordinary words
+ *        (the debugging repros happened to be English "neck", "sibling"
+ *        and Japanese 首 - they were never special-cased, and no term
+ *        ever is).
  *      - dictionaryapi.dev for English (keyless, free, attributed)
  *   4. AI (Gemini) is the explicit, user-triggered fallback via /api/enrich -
  *      it is never called silently here, so quotas stay predictable.
@@ -45,8 +50,10 @@ const MAX_TERM = 100;
 async function lookupOnline(language, term) {
   const entries = [];
 
-  // Japanese: jisho.org (JMdict) first. Readings (くび) light up furigana in
-  // the reader immediately, and the API handles inflected input.
+  // Japanese: jisho.org (JMdict) first - for EVERY Japanese term, no
+  // exceptions and no per-word special cases. Readings (くび) light up
+  // furigana in the reader immediately, and the API handles inflected
+  // input.
   if (language.code === 'ja') {
     try {
       const data = await fetchJson(JISHO_SEARCH_URL(term), { timeoutMs: 12000, maxBytes: 2 * 1024 * 1024 });

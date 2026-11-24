@@ -52,6 +52,7 @@ import {
   fetchJsonRetry,
   fetchText,
   memoJson,
+  memoJsonStale,
 } from './lib/sources.mjs';
 
 const PROVIDER_LICENSES = {
@@ -59,6 +60,7 @@ const PROVIDER_LICENSES = {
   wikibooks: 'cc-by-sa-4.0',
   wikinews: 'cc-by-2.5',
   wikisource: 'unspecified (varies per work - check the work page)',
+  wikivoyage: 'cc-by-sa-4.0',
 };
 
 const PROVIDER_PROJECTS = {
@@ -66,6 +68,7 @@ const PROVIDER_PROJECTS = {
   wikipedia: 'wikipedia',
   wikibooks: 'wikibooks',
   wikinews: 'wikinews',
+  wikivoyage: 'wikivoyage',
 };
 
 /** project for a provider id, accepting the custom-edition bridge. */
@@ -84,20 +87,29 @@ export default handler({
     // ---------------------------------------------------------------- provider list
     if (!q.provider) {
       const language = q.language ? String(q.language).slice(0, 16) : null;
+      let sourceEdition = null;
       if (language) {
-        const rows = await sql()`SELECT code FROM knowledge.languages WHERE code = ${language}`;
+        const rows = await sql()`SELECT code, source_edition FROM knowledge.languages WHERE code = ${language}`;
         if (rows.length === 0) {
           throw new HttpError(404, 'language-not-found', 'Unknown language code.');
         }
+        sourceEdition = validWikiCode(rows[0].source_edition);
       }
 
       // Custom/unknown language: probe its own code against the live wikis
       // once (memoized 15 min). Maori "mi" then simply gets Wikipedia.
+      // With a SOURCE EDITION defined in Settings, that edition is probed
+      // too - the built-in providers then serve the language through it
+      // and the custom-edition "type a code" bridge stays out of the way.
       let probed = null;
       if (language && !PROVIDERS.wikipedia.languages.includes(language)) {
-        probed = await memoJson(`probe:${language}`, 15 * 60 * 1000, async () => ({
-          wikipedia: language.length <= 8 ? await wikiEditionExists(language, 'wikipedia') : false,
-          wikisource: language.length <= 8 ? await wikiEditionExists(language, 'wikisource') : false,
+        probed = await memoJson(`probe:${language}:${sourceEdition ?? ''}`, 15 * 60 * 1000, async () => ({
+          wikipedia: await Promise.all(
+            [language.length <= 8 ? language : null, sourceEdition].filter(Boolean).map((c) => wikiEditionExists(c, 'wikipedia')),
+          ).then((rs) => rs.some(Boolean)),
+          wikisource: await Promise.all(
+            [language.length <= 8 ? language : null, sourceEdition].filter(Boolean).map((c) => wikiEditionExists(c, 'wikisource')),
+          ).then((rs) => rs.some(Boolean)),
         }));
       }
 
@@ -116,7 +128,7 @@ export default handler({
             providers.push({
               id,
               label: meta.label,
-              blurb: meta.blurb,
+              blurb: sourceEdition ? `Any wiki edition by its language code - your saved edition "${sourceEdition}" is already used by the sources above.` : meta.blurb,
               priority: meta.priority ?? 99,
               needs_code: true,
               available: true,
@@ -135,14 +147,14 @@ export default handler({
         providers.push({
           id,
           label: meta.label,
-          blurb: probed && id in probed && probed[id] ? `${meta.blurb} (serving this language code directly)` : meta.blurb,
+          blurb: probed && id in probed && probed[id] ? `${meta.blurb} (reading the ${sourceEdition ?? language} edition for this language)` : meta.blurb,
           priority: meta.priority ?? 99,
           available: true,
         });
       }
       providers.sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
       const recommended = language ? providersForLanguage(language).map((p) => p.id) : [];
-      return json({ providers, recommended });
+      return json({ providers, recommended, source_edition: sourceEdition });
     }
 
     // ---------------------------------------------------------------- search
@@ -150,10 +162,11 @@ export default handler({
     const language = requireString(q, 'language', { max: 16 });
     const search = q.q ? String(q.q).slice(0, 200) : '';
 
-    const langRows = await sql()`SELECT code FROM knowledge.languages WHERE code = ${language}`;
+    const langRows = await sql()`SELECT code, source_edition FROM knowledge.languages WHERE code = ${language}`;
     if (langRows.length === 0) {
       throw new HttpError(404, 'language-not-found', 'Unknown language code.');
     }
+    const sourceEdition = validWikiCode(langRows[0].source_edition);
 
     // Aozora Bunko (Japanese): the curated shelf lives in sources.mjs; the
     // search is a local filter, so it is instant and never rate-limited.
@@ -193,36 +206,76 @@ export default handler({
       // timeout and falls back to a filtered browse of the language shelf.
       // Every upstream call is memo-cached for 10 minutes: Gutendex
       // rate-limits bursts aggressively (also reproduced 2026-11).
+      //
+      // TIME BUDGET (2026-11 fix): the function dies at ~10 s. Retries used
+      // to stack 3 x 12 s attempts and the client saw "page 2 always times
+      // out; a refresh sometimes fixes it" (the refresh hit the memo cache a
+      // slow first attempt had populated in the background). Now: 2 attempts
+      // x 4 s fit the budget, a failure serves the last cached page (stale
+      // beats error), and a cold miss answers with a friendly retry note
+      // instead of a 502.
       const page = Math.min(100, Math.max(1, Number(q.page) || 1));
       const topic = GUTENBERG_TOPICS.includes(String(q.topic ?? '')) ? String(q.topic) : null;
-      let data = null;
-      let note = null;
       const cacheKey = (url) => `gutendex:${url}`;
-      if (search) {
+      const fetchGutendex = async (key, url) => {
         try {
-          data = await memoJson(
-            cacheKey(GUTENDEX_SEARCH_URL(search, language, page)),
-            10 * 60 * 1000,
-            () => fetchJsonRetry(GUTENDEX_SEARCH_URL(search, language, page), { timeoutMs: 9000, maxBytes: 2 * 1024 * 1024 }),
-          );
+          return {
+            data: await memoJson(key, 10 * 60 * 1000, () =>
+              fetchJsonRetry(url, { timeoutMs: 4000, attempts: 2, backoffMs: 250, maxBytes: 2 * 1024 * 1024 }),
+            ),
+            stale: false,
+          };
         } catch {
-          data = await memoJson(
+          const cached = memoJsonStale(key);
+          if (cached) return { data: cached, stale: true };
+          return { data: null, stale: false };
+        }
+      };
+      let note = null;
+      let result;
+      if (search) {
+        result = await fetchGutendex(
+          cacheKey(GUTENDEX_SEARCH_URL(search, language, page)),
+          GUTENDEX_SEARCH_URL(search, language, page),
+        );
+        if (!result.data) {
+          result = await fetchGutendex(
             cacheKey(GUTENDEX_BROWSE_URL(language, 1, topic)),
-            10 * 60 * 1000,
-            () => fetchJsonRetry(GUTENDEX_BROWSE_URL(language, 1, topic), { timeoutMs: 12000, maxBytes: 2 * 1024 * 1024 }),
+            GUTENDEX_BROWSE_URL(language, 1, topic),
           );
-          note =
-            "Project Gutenberg's search is slow right now - showing the " +
-            `${language} public-domain shelf instead; the filter below applied your words to titles and authors on it.`;
+          if (result.data) {
+            note =
+              "Project Gutenberg's search is slow right now - showing the " +
+              `${language} public-domain shelf instead; the filter below applied your words to titles and authors on it.`;
+          }
         }
       } else {
-        data = await memoJson(
+        result = await fetchGutendex(
           cacheKey(GUTENDEX_BROWSE_URL(language, page, topic)),
-          30 * 60 * 1000,
-          () => fetchJsonRetry(GUTENDEX_BROWSE_URL(language, page, topic), { timeoutMs: 12000, maxBytes: 2 * 1024 * 1024 }),
+          GUTENDEX_BROWSE_URL(language, page, topic),
         );
       }
-      let items = mapGutendex(data);
+      if (!result.data) {
+        // Cold miss on a slow upstream: an honest, actionable answer rather
+        // than a 502. The next attempt usually lands (Gutendex throttles
+        // bursts, and successful pages stay memo-cached for 10 minutes).
+        return json({
+          provider,
+          language,
+          query: search,
+          page,
+          pages: null,
+          note: "Project Gutenberg's catalogue did not answer in time (it rate-limits bursts). Press Search or Next again in a few seconds - pages that have loaded once stay cached for ten minutes.",
+          topic,
+          items: [],
+        });
+      }
+      if (result.stale) {
+        note =
+          (note ? `${note} ` : '') +
+          'Showing the last successfully loaded version of this page - the catalogue was slow just now.';
+      }
+      let items = mapGutendex(result.data);
       if (note && search) {
         const needle = search.toLowerCase();
         items = items.filter(
@@ -234,7 +287,7 @@ export default handler({
       // The shelf itself may mix languages; the active language wins.
       const activeLang = language === 'nb' ? 'no' : language;
       items = items.filter((it) => it.language === activeLang);
-      const pageInfo = gutendexPageInfo(data);
+      const pageInfo = gutendexPageInfo(result.data);
       return json({
         provider,
         language,
@@ -252,9 +305,10 @@ export default handler({
     if (wikiRoute) {
       const { project, custom } = wikiRoute;
 
-      // The wiki code to actually fetch: a user-supplied code for the
-      // custom-edition providers (required), or an optional override for the
-      // built-in ones (e.g. reading a different edition of the same language).
+      // The wiki code to actually fetch, in priority order: a user-supplied
+      // code for the custom-edition providers (required there), an explicit
+      // override for the built-in ones, then the SOURCE EDITION the user
+      // defined once in Settings, then the language's own code.
       let urlLang = language;
       if (custom) {
         const code = validWikiCode(q.wiki);
@@ -269,6 +323,7 @@ export default handler({
       } else {
         const override = validWikiCode(q.wiki);
         if (override) urlLang = override;
+        else if (sourceEdition) urlLang = sourceEdition;
       }
 
       // With a query: full search. Without one: the edition's own shelf -

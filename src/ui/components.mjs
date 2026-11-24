@@ -43,7 +43,12 @@ const ICONS = {
   brain: 'M9 3a4 4 0 00-4 4 3 3 0 00-1 5.8V15a4 4 0 004 4h1a1 1 0 001-1V4a1 1 0 00-1-1zm6 0a4 4 0 014 4 3 3 0 011 5.8V15a4 4 0 01-4 4h-1a1 1 0 01-1-1V4a1 1 0 011-1z',
   library: 'M4 3h3v18H4V3zm5 0h3v18H9V3zm5.6.5l3 17.6 2.9-.5-3-17.6-2.9.5z',
   layers: 'M12 2L1 7l11 5 11-5-11-5zM1 12l11 5 11-5-11 5-11-5zm0 5l11 5 11-5-11 5-11-5z',
-  settings: 'M12 8a4 4 0 100 8 4 4 0 000-8zm9.4 4a8 8 0 01-.1 1.3l2 1.6-2 3.4-2.4-1a8 8 0 01-2.3 1.3l-.4 2.6h-4l-.4-2.6a8 8 0 01-2.3-1.3l-2.4 1-2-3.4 2-1.6a8 8 0 010-2.6l-2-1.6 2-3.4 2.4 1a8 8 0 012.3-1.3l.4-2.6h4l.4 2.6a8 8 0 012.3 1.3l2.4-1 2 3.4-2 1.6a8 8 0 01.1 1.3z',
+  // Settings gear: the hole is a 4r circle at (12,12); the gear subpath is
+  // drawn relative to the circle's start point (12,8), so its initial move
+  // must be m7.2 4 (= x 19.2) to centre the teeth on (12,12). It was
+  // m9.4 4 for years, which shifted the whole gear +2.2px right - the
+  // "the little circle isn't centred" bug (2026-11).
+  settings: 'M12 8a4 4 0 100 8 4 4 0 000-8zm7.2 4a8 8 0 01-.1 1.3l2 1.6-2 3.4-2.4-1a8 8 0 01-2.3 1.3l-.4 2.6h-4l-.4-2.6a8 8 0 01-2.3-1.3l-2.4 1-2-3.4 2-1.6a8 8 0 010-2.6l-2-1.6 2-3.4 2.4 1a8 8 0 012.3-1.3l.4-2.6h4l.4 2.6a8 8 0 012.3 1.3l2.4-1 2 3.4-2 1.6a8 8 0 01.1 1.3z',
   plus: 'M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5z',
   check: 'M9 16.2L4.8 12l-1.4 1.4L9 19 20.6 7.4 19.2 6 9 16.2z',
   x: 'M6.4 5l-1.4 1.4L10.6 12l-5.6 5.6L6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6 5.6-5.6L18.4 5 12.8 10.6 6.4 5z',

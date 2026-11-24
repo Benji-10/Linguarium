@@ -12,7 +12,7 @@
  *
  *   { mode: 'provider', provider, ref, language_code, wiki? }
  *     Full import from a catalog item (aozora | gutenberg | wikisource |
- *     wikipedia | wikibooks | wikinews): fetches the text, attaches the
+ *     wikipedia | wikibooks | wikinews | wikivoyage): fetches the text, attaches the
  *     source's own metadata
  *     (author, source URL, license) and stores it as a user text with
  *     provenance 'user-imported'. Gutenberg books longer than the import cap
@@ -55,7 +55,7 @@ const MAX_BODY_CHARS = 200000;
 // that fits the TOTAL function budget (~28 s worst case).
 const GUTENBERG_CANDIDATE_TIMEOUTS = [24000, 8000, 8000];
 const GUTENBERG_BYTE_CAP = 700 * 1024; // > the 200k-char import cut for every script
-const TEXT_PROVIDERS = new Set(['gutenberg', 'wikisource', 'wikipedia', 'wikibooks', 'wikinews', 'aozora']);
+const TEXT_PROVIDERS = new Set(['gutenberg', 'wikisource', 'wikipedia', 'wikibooks', 'wikinews', 'wikivoyage', 'aozora']);
 
 const PROVIDER_META = {
   aozora: {
@@ -64,7 +64,11 @@ const PROVIDER_META = {
   },
   gutenberg: {
     license: 'public-domain',
-    authorOf: (meta) => meta?.author ?? null,
+    // Gutendex returns { authors: [{ name, ... }], ... } - anonymous works
+    // (author: null / empty array) must not crash the import; they fall
+    // back to an honest "Unknown author".
+    authorOf: (meta) =>
+      (Array.isArray(meta?.authors) ? meta.authors.map((a) => a?.name).filter(Boolean).join(', ') : '') || null,
     pageUrl: (ref) => `https://www.gutenberg.org/ebooks/${ref}`,
     note: 'Public-domain book fetched from the Project Gutenberg text archive.',
   },
@@ -91,6 +95,12 @@ const PROVIDER_META = {
     authorOf: () => 'Wikinews contributors',
     pageUrl: (language, ref) => `https://${language}.wikinews.org/wiki/${encodeURIComponent(ref)}`,
     note: 'Wikinews article text (CC BY 2.5, attribution: Wikinews contributors).',
+  },
+  wikivoyage: {
+    license: 'cc-by-sa-4.0',
+    authorOf: () => 'Wikivoyage contributors',
+    pageUrl: (language, ref) => `https://${language}.wikivoyage.org/wiki/${encodeURIComponent(ref)}`,
+    note: 'Travel guide page from Wikivoyage (CC BY-SA 4.0, attribution: Wikivoyage contributors).',
   },
 };
 
@@ -262,7 +272,7 @@ export default handler({
         if (!/^\d+$/.test(ref)) throw new HttpError(400, 'invalid-ref', 'Gutenberg refs are numeric book ids.');
         let meta = null;
         try {
-          meta = await fetchJsonRetry(GUTENDEX_BOOK_URL(ref), { timeoutMs: 10000 });
+          meta = await fetchJsonRetry(GUTENDEX_BOOK_URL(ref), { timeoutMs: 9000 });
         } catch {
           /* metadata is best-effort; the text fetch below decides */
         }
@@ -270,7 +280,11 @@ export default handler({
         body = fetched.body;
         byteCapped = fetched.byteCapped;
         const meta2 = PROVIDER_META.gutenberg;
-        author = meta.author ?? meta2.authorOf(meta);
+        // `meta` can be null (Gutendex slow/rate-limited) or an object whose
+        // authors array is empty (anonymous works): both crashed the import
+        // in the wild (2026-11) - every access is guarded and the fallback
+        // is an honest "Unknown author".
+        author = meta2.authorOf(meta) ?? 'Unknown author';
         license = meta2.license;
         sourceUrl = meta2.pageUrl(ref);
         note = meta2.note;
@@ -284,11 +298,12 @@ export default handler({
         note = fetched.note;
         title = aozoraByRef(ref)?.t ?? ref;
       } else {
-        const project = provider; // wikisource | wikipedia | wikibooks | wikinews
-        // Wiki edition to fetch from: the custom-edition bridge stamps the
-        // browsed edition on the catalog item; without it the import reads the
-        // user's own language edition (the historical behaviour).
-        const edition = validWikiCode(data.wiki) ?? languageCode;
+        const project = provider; // wikisource | wikipedia | wikibooks | wikinews | wikivoyage
+        // Wiki edition to fetch from, in priority order: the edition the
+        // catalog stamped on this item (the browsed edition), then the
+        // SOURCE EDITION the user defined once in Settings for a custom
+        // language, then the language's own code (the historical default).
+        const edition = validWikiCode(data.wiki) ?? validWikiCode(language.source_edition) ?? languageCode;
         if (data.wiki != null && data.wiki !== '' && edition !== data.wiki) {
           throw new HttpError(400, 'invalid-wiki-code', 'The wiki edition code looks invalid - use a plain code like "mi" or "simple".');
         }

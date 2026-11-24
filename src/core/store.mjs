@@ -64,10 +64,13 @@ export function restoreActiveLanguage() {
   return state.activeLanguage;
 }
 
-/** Tokenizer config for the active (or given) language. */
+/** Tokenizer config for the active (or given) language. The language code
+ *  rides along as `code` so char-level languages (ja, zh, th...) segment
+ *  with the right ICU dictionary via Intl.Segmenter; every other consumer
+ *  of the config ignores the extra key. */
 export function tokenizerFor(languages, code) {
   const lang = (languages ?? []).find((l) => l.code === code);
-  return lang?.tokenizer ?? {};
+  return { ...(lang?.tokenizer ?? {}), code };
 }
 
 export function languageName(languages, code) {
